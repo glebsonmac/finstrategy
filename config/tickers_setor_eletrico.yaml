@@ -1,0 +1,31 @@
+# Lista semente do setor elétrico — usada só para popular a watchlist na primeira
+# execução (ver config/watchlist.yaml e src/finstrategy/data/watchlist.py).
+# Qualquer ticker do Yahoo Finance pode ser adicionado depois; esta lista NÃO é um
+# filtro embutido no pipeline, é só o ponto de partida (ver plan.md, seção 5).
+tickers:
+  # B3 — setor elétrico (sem cadeia de opções no Yahoo; recebem ação + fundamentalista
+  # + DQN de entrada, mas ficam "não elegível: sem opções no Yahoo" para o módulo de
+  # put de proteção)
+  - symbol: TAEE11.SA
+    tags: [setor_eletrico, b3, transmissao]
+  - symbol: CPFE3.SA
+    tags: [setor_eletrico, b3, distribuicao]
+  - symbol: EGIE3.SA
+    tags: [setor_eletrico, b3, geracao]
+  - symbol: CMIG4.SA
+    tags: [setor_eletrico, b3, integrada]
+  - symbol: CPLE3.SA
+    tags: [setor_eletrico, b3, integrada]
+  # EUA / ADR — setor elétrico com cadeia de opções líquida no Yahoo (pipeline completo).
+  # Observação (validado em 2026-10-13): ELET3.SA, TRPL4.SA, EBR e ELP não resolveram no
+  # Yahoo nesta data (possível lacuna de cobertura/renomeação); CIG (ADR da CEMIG) tem
+  # opções líquidas e cobre bem o papel que EBR/ELP teriam. Reavaliar os descartados
+  # periodicamente — podem voltar a resolver.
+  - symbol: XLU
+    tags: [setor_eletrico, eua, etf]
+  - symbol: CIG
+    tags: [setor_eletrico, adr, integrada]
+  - symbol: DUK
+    tags: [setor_eletrico, eua, integrada]
+  - symbol: NEE
+    tags: [setor_eletrico, eua, integrada]

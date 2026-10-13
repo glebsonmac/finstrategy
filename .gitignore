@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# finstrategy data store (CSV gerado em runtime, não versionar; manter estrutura via .gitkeep)
+data_store/market/*
+data_store/fundamentals/*
+data_store/model_runs/*
+data_store/reports/*
+!data_store/**/.gitkeep
+config/watchlist.yaml
+config/settings.yaml

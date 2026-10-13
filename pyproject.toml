@@ -1,0 +1,30 @@
+[project]
+name = "finstrategy"
+version = "0.1.0"
+description = "Ação + put de proteção: dados, Black-Scholes, DQN e relatório para o setor elétrico (e outros ativos)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "yfinance",
+    "streamlit",
+    "pandas_market_calendars",
+    "reportlab",
+    "pyyaml",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
