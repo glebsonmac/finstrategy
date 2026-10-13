@@ -12,6 +12,7 @@ coletor (ver aviso do notebook original sobre bid/ask zerado fora do pregão).
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass, field
@@ -31,6 +32,34 @@ from .market_session import any_market_open, exchange_calendar_for_ticker
 
 def _now_iso() -> str:
     return pd.Timestamp.now().isoformat(timespec="seconds")
+
+
+def status_path(data_store_root: Path | str = DEFAULT_DATA_STORE_ROOT) -> Path:
+    return Path(data_store_root) / "collector_status.json"
+
+
+def write_status(data_store_root: Path | str, **fields) -> None:
+    """Grava o estado do coletor para a tela "Coletor" do frontend conseguir mostrar
+    feedback ao vivo (checado em quê, coletou o quê, algum erro) sem precisar inspecionar
+    a thread em background diretamente — um arquivo pequeno, lido a cada rerun da UI."""
+    path = status_path(data_store_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = read_status(data_store_root)
+    current.update(fields)
+    current["updated_at"] = _now_iso()
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(current, handle, ensure_ascii=False, indent=2, default=str)
+
+
+def read_status(data_store_root: Path | str = DEFAULT_DATA_STORE_ROOT) -> dict:
+    path = status_path(data_store_root)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def collect_price_snapshot(entry: WatchlistEntry, provider, today: pd.Timestamp) -> dict:
@@ -67,6 +96,12 @@ def run_model_pipeline_for_ticker(entry: WatchlistEntry, provider, settings: Ana
         except MarketDataError as reason:
             base_row["status"] = f"sem derivativo elegível agora: {reason}"
             put_result = None
+        except Exception as unexpected:
+            # qualquer erro inesperado aqui NÃO pode derrubar a thread do coletor
+            # (já aconteceu: bug de timezone matou o loop em background sem avisar
+            # a UI) — vira status visível em vez de exceção não tratada.
+            base_row["status"] = f"erro inesperado no derivativo: {unexpected}"
+            put_result = None
     else:
         base_row["status"] = "não elegível: sem opções no Yahoo"
         put_result = None
@@ -98,19 +133,29 @@ class CollectorConfig:
 
 
 def run_collection_cycle(config: CollectorConfig, settings: AnalysisSettings, risk_free_rate: float, run_model: bool, today: pd.Timestamp | None = None) -> list[dict]:
-    """Uma rodada de coleta sobre toda a watchlist. Devolve as linhas gravadas (para log/teste)."""
+    """Uma rodada de coleta sobre toda a watchlist. Devolve as linhas gravadas (para log/teste).
+
+    `today` deve ser um Timestamp NAIVE (sem timezone) — vencimentos de opção que vêm
+    do Yahoo são naive, e comparar naive com tz-aware (`now.normalize()` com tz="UTC",
+    por exemplo) levanta `TypeError` dentro de `analyze_ticker`. `run_forever` cuida
+    de passar a data certa; outros chamadores devem fazer o mesmo."""
     today = today or pd.Timestamp.today().normalize()
     entries = load_watchlist(config.watchlist_path)
     rows_written = []
     for entry in entries:
-        price_row = collect_price_snapshot(entry, config.provider, today)
-        append_row(market_csv_path(config.data_store_root, entry.symbol, today), price_row)
-        rows_written.append(price_row)
+        try:
+            price_row = collect_price_snapshot(entry, config.provider, today)
+            append_row(market_csv_path(config.data_store_root, entry.symbol, today), price_row)
+            rows_written.append(price_row)
 
-        if run_model:
-            model_row = run_model_pipeline_for_ticker(entry, config.provider, settings, risk_free_rate, today)
-            append_row(model_runs_csv_path(config.data_store_root, today), model_row)
-            rows_written.append(model_row)
+            if run_model:
+                model_row = run_model_pipeline_for_ticker(entry, config.provider, settings, risk_free_rate, today)
+                append_row(model_runs_csv_path(config.data_store_root, today), model_row)
+                rows_written.append(model_row)
+        except Exception as unexpected:
+            # um ticker com problema (rede, dado inesperado) não pode derrubar a
+            # rodada inteira nem, pior, a thread do coletor — registra e segue.
+            rows_written.append({"ticker": entry.symbol, "collected_at": _now_iso(), "status": f"erro inesperado: {unexpected}"})
     return rows_written
 
 
@@ -133,24 +178,46 @@ def run_forever(
     risk_free_rate = provider.get_risk_free_rate()
     last_model_run = 0.0
     iterations = 0
+    write_status(config.data_store_root, started_at=_now_iso(), iterations=0, last_error=None)
 
     while not stop_event.is_set():
-        now = pd.Timestamp.now(tz="UTC")
-        entries = load_watchlist(config.watchlist_path)
-        calendars = {exchange_calendar_for_ticker(entry.symbol) for entry in entries} or {"NYSE"}
-        if any_market_open(now, list(calendars)):
-            run_model = (time.monotonic() - last_model_run) >= config.model_run_interval_seconds
-            run_collection_cycle(config, settings, risk_free_rate, run_model=run_model, today=now.normalize())
-            if run_model:
-                last_model_run = time.monotonic()
-            sleep_seconds = config.poll_interval_seconds
-        else:
-            sleep_seconds = min(config.poll_interval_seconds, 300)  # checa de novo em até 5 min
+        try:
+            now_utc = pd.Timestamp.now(tz="UTC")  # só para checar calendário de pregão (schedule vem em UTC)
+            today = pd.Timestamp.today().normalize()  # NAIVE — é o que analyze_ticker/choose_expiration esperam
+            entries = load_watchlist(config.watchlist_path)
+            calendars = {exchange_calendar_for_ticker(entry.symbol) for entry in entries} or {"NYSE"}
+            market_open = any_market_open(now_utc, list(calendars))
 
-        iterations += 1
+            if market_open:
+                run_model = (time.monotonic() - last_model_run) >= config.model_run_interval_seconds
+                rows = run_collection_cycle(config, settings, risk_free_rate, run_model=run_model, today=today)
+                if run_model:
+                    last_model_run = time.monotonic()
+                sleep_seconds = config.poll_interval_seconds
+                price_rows = [r for r in rows if "price" in r]
+                write_status(
+                    config.data_store_root, last_check_at=_now_iso(), market_open=True,
+                    last_collection_at=_now_iso(), last_model_run_at=_now_iso() if run_model else None,
+                    last_cycle_tickers=price_rows, last_error=None,
+                )
+            else:
+                sleep_seconds = min(config.poll_interval_seconds, 300)  # checa de novo em até 5 min
+                write_status(config.data_store_root, last_check_at=_now_iso(), market_open=False)
+
+            iterations += 1
+            write_status(config.data_store_root, iterations=iterations)
+        except Exception as unexpected:
+            # rede fora do ar um instante, erro inesperado de um provider, etc. — a
+            # thread do coletor NUNCA pode morrer em silêncio (já aconteceu uma vez
+            # por um bug de timezone); registra o erro no status e segue vivo.
+            sleep_seconds = min(config.poll_interval_seconds, 300)
+            write_status(config.data_store_root, last_check_at=_now_iso(), last_error=str(unexpected))
+
         if max_iterations is not None and iterations >= max_iterations:
             break
         stop_event.wait(sleep_seconds)
+
+    write_status(config.data_store_root, stopped_at=_now_iso())
 
 
 if __name__ == "__main__":

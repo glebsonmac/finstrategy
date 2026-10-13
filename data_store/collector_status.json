@@ -1,0 +1,31 @@
+{
+  "started_at": "2026-10-13T14:42:52",
+  "iterations": 2,
+  "last_error": null,
+  "updated_at": "2026-10-13T14:44:38",
+  "last_check_at": "2026-10-13T14:44:09",
+  "market_open": true,
+  "last_collection_at": "2026-10-13T14:44:09",
+  "last_model_run_at": null,
+  "last_cycle_tickers": [
+    {
+      "ticker": "DUK",
+      "collected_at": "2026-10-13T14:44:08",
+      "price": 117.86499786376953,
+      "status": "ok"
+    },
+    {
+      "ticker": "TAEE11.SA",
+      "collected_at": "2026-10-13T14:44:09",
+      "price": 46.060001373291016,
+      "status": "ok"
+    },
+    {
+      "ticker": "SPY",
+      "collected_at": "2026-10-13T14:44:09",
+      "price": 777.5,
+      "status": "ok"
+    }
+  ],
+  "stopped_at": "2026-10-13T14:44:38"
+}

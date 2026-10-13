@@ -68,6 +68,15 @@ def get_fundamental_snapshot(ticker: str) -> FundamentalSnapshot:
     except Exception:
         free_cash_flow = None
 
+    # yfinance devolve `dividendYield` já em pontos percentuais (ex.: 3.69 = 3,69%),
+    # diferente de `returnOnEquity`/`revenueGrowth`/`profitMargins`, que vêm como
+    # fração (ex.: 0.0986 = 9,86%). Normalizamos aqui para fração, para que todo
+    # FundamentalSnapshot seja consistente e a formatação "{:.1%}" no frontend funcione
+    # igual para todos os campos de percentual (detectado ao vivo: sem isso, o
+    # frontend mostrava "Dividend yield: 369%" em vez de "3.69%").
+    raw_dividend_yield = info.get("dividendYield")
+    dividend_yield_ttm = raw_dividend_yield / 100 if raw_dividend_yield is not None else None
+
     return FundamentalSnapshot(
         ticker=ticker,
         name=info.get("longName") or info.get("shortName") or ticker,
@@ -78,7 +87,7 @@ def get_fundamental_snapshot(ticker: str) -> FundamentalSnapshot:
         price_to_book=info.get("priceToBook"),
         roe=info.get("returnOnEquity"),
         debt_to_equity=info.get("debtToEquity"),
-        dividend_yield_ttm=info.get("dividendYield"),
+        dividend_yield_ttm=dividend_yield_ttm,
         revenue_growth_yoy=info.get("revenueGrowth"),
         free_cash_flow=free_cash_flow,
         market_cap=info.get("marketCap"),
