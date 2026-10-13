@@ -1,0 +1,50 @@
+# As 20 maiores ações da bolsa dos EUA por valor de mercado, ranqueadas AO VIVO via
+# Yahoo Finance (fast_info.marketCap) em 2026-10-13 sobre um pool de ~60 candidatas
+# mega-cap conhecidas — não é uma lista de memória, foi medida (mesmo princípio usado
+# para validar `tickers_setor_eletrico.yaml`). Ranking de mercado muda; reavaliar
+# periodicamente rodando `scripts/rank_us_megacaps.py` de novo.
+#
+# Usada como semente padrão do coletor noturno (`scripts/collect_overnight.py`) quando
+# nenhuma lista de tickers é passada — não é a watchlist do app Streamlit (essa
+# continua semeada pelo setor elétrico, `tickers_setor_eletrico.yaml`).
+tickers:
+  - symbol: NVDA
+    tags: [top20_eua, tecnologia]
+  - symbol: AAPL
+    tags: [top20_eua, tecnologia]
+  - symbol: GOOGL
+    tags: [top20_eua, tecnologia]
+  - symbol: MSFT
+    tags: [top20_eua, tecnologia]
+  - symbol: AMZN
+    tags: [top20_eua, consumo_discricionario]
+  - symbol: META
+    tags: [top20_eua, tecnologia]
+  - symbol: AVGO
+    tags: [top20_eua, tecnologia]
+  - symbol: TSLA
+    tags: [top20_eua, consumo_discricionario]
+  - symbol: BRK-B
+    tags: [top20_eua, financeiro]
+  - symbol: LLY
+    tags: [top20_eua, saude]
+  - symbol: AMD
+    tags: [top20_eua, tecnologia]
+  - symbol: WMT
+    tags: [top20_eua, consumo_basico]
+  - symbol: JPM
+    tags: [top20_eua, financeiro]
+  - symbol: V
+    tags: [top20_eua, financeiro]
+  - symbol: XOM
+    tags: [top20_eua, energia]
+  - symbol: JNJ
+    tags: [top20_eua, saude]
+  - symbol: INTC
+    tags: [top20_eua, tecnologia]
+  - symbol: MA
+    tags: [top20_eua, financeiro]
+  - symbol: PLTR
+    tags: [top20_eua, tecnologia]
+  - symbol: ABBV
+    tags: [top20_eua, saude]

@@ -21,9 +21,10 @@ if str(_SRC_ROOT) not in sys.path:
 
 from finstrategy.collector import csv_store
 from finstrategy.collector.market_session import any_market_open, exchange_calendar_for_ticker
+from finstrategy.collector.overnight import US_TOP20_SEED_PATH
 from finstrategy.collector.scheduler import CollectorConfig, read_status, run_forever
 from finstrategy.config_model import AnalysisSettings, DEFAULT_SETTINGS_PATH, load_settings, save_settings
-from finstrategy.data import symbol_search, watchlist as watchlist_module
+from finstrategy.data import local_stock_list, symbol_search, watchlist as watchlist_module
 from finstrategy.data.errors import MarketDataError
 from finstrategy.data.watchlist import DEFAULT_DATA_STORE_ROOT, DEFAULT_WATCHLIST_PATH
 from finstrategy.data.yahoo_provider import YahooProvider
@@ -193,47 +194,81 @@ if PAGE == "Ações":
     )
 
     if not DEFAULT_WATCHLIST_PATH.exists():
-        if st.button("Popular com a semente do setor elétrico (primeira vez)"):
+        st.caption("Watchlist vazia — popule com uma semente pronta ou use as abas abaixo para escolher você mesmo.")
+        seed_col1, seed_col2 = st.columns(2)
+        if seed_col1.button("Popular com as 20 maiores ações dos EUA"):
+            with st.spinner("Buscando dados das 20 maiores ações dos EUA..."):
+                added = watchlist_module.ensure_seeded(seed_path=US_TOP20_SEED_PATH)
+            st.success(f"{len(added)} tickers adicionados.")
+            st.rerun()
+        if seed_col2.button("Popular com a semente do setor elétrico"):
             with st.spinner("Buscando dados dos tickers semente..."):
                 added = watchlist_module.ensure_seeded()
             st.success(f"{len(added)} tickers adicionados.")
             st.rerun()
 
-    st.subheader("Buscar e marcar ações")
-    query = st.text_input("Nome da empresa ou código (ex.: 'eletrica', 'duke energy', 'PETR')")
-    if query:
-        with st.spinner("Buscando no Yahoo Finance..."):
-            matches = symbol_search.search_symbols(query)
-        if not matches:
-            st.info("Nenhum resultado para essa busca.")
+    tab_list, tab_search, tab_paste = st.tabs(["📋 Escolher da lista", "🔎 Buscar no Yahoo", "✍️ Colar tickers"])
+
+    with tab_list:
+        st.caption(
+            "Lista local com as ~500 ações do S&P 500 (ticker, nome, setor) — filtra na hora, "
+            "sem bater na internet. Para uma ação que não está aqui, use a aba 'Buscar no Yahoo'."
+        )
+        list_query = st.text_input("Filtrar por ticker ou nome (ex.: 'duke', 'tech', 'AAPL')", key="local_list_query")
+        local_matches = local_stock_list.search_local_stocks(list_query, max_results=60)
+        if not local_matches:
+            st.info("Nenhuma ação encontrada nesse filtro.")
         else:
-            selected = []
-            for match in matches:
-                label = f"{match.symbol} — {match.name} ({match.exchange}, {match.quote_type})"
-                if st.checkbox(label, key=f"match_{match.symbol}"):
-                    selected.append(match.symbol)
-            if selected and st.button(f"Adicionar {len(selected)} selecionada(s) à watchlist"):
-                with st.spinner("Buscando preço, fundamentalista e elegibilidade de derivativo..."):
-                    added, invalid = watchlist_module.add_tickers(selected)
+            st.caption(f"{len(local_matches)} resultado(s) — marque as que quiser adicionar.")
+            selected_local = []
+            for match in local_matches:
+                label = f"{match.symbol} — {match.name} ({match.exchange})"
+                if st.checkbox(label, key=f"local_{match.symbol}"):
+                    selected_local.append(match.symbol)
+            if selected_local and st.button(f"Adicionar {len(selected_local)} selecionada(s) à watchlist", key="add_from_list"):
+                with st.spinner("Confirmando preço, fundamentalista e elegibilidade de derivativo no Yahoo..."):
+                    added, invalid = watchlist_module.add_tickers(selected_local)
                 st.success(f"Adicionados/atualizados: {', '.join(e.symbol for e in added)}")
                 if invalid:
                     st.warning(f"Falharam: {invalid}")
                 st.rerun()
 
-    st.subheader("Ou cole um ou mais tickers direto")
-    raw_tickers = st.text_area("Um ticker por linha ou separados por vírgula (ex.: AAPL, PETR4.SA, TAEE11.SA)")
-    if st.button("Adicionar tickers digitados"):
-        tickers = [t.strip() for chunk in raw_tickers.splitlines() for t in chunk.split(",") if t.strip()]
-        if not tickers:
-            st.warning("Nenhum ticker digitado.")
-        else:
-            with st.spinner(f"Validando e buscando dados de {len(tickers)} ticker(s)..."):
-                added, invalid = watchlist_module.add_tickers(tickers)
-            if added:
-                st.success(f"Adicionados/atualizados: {', '.join(e.symbol for e in added)}")
-            if invalid:
-                st.error("Falharam:\n" + "\n".join(f"- {ticker}: {reason}" for ticker, reason in invalid.items()))
-            st.rerun()
+    with tab_search:
+        st.caption("Busca ao vivo no Yahoo Finance — mais lenta, mas encontra qualquer ação (B3, ADR, ETF, não só S&P 500).")
+        query = st.text_input("Nome da empresa ou código (ex.: 'eletrica', 'duke energy', 'PETR')")
+        if query:
+            with st.spinner("Buscando no Yahoo Finance..."):
+                matches = symbol_search.search_symbols(query)
+            if not matches:
+                st.info("Nenhum resultado para essa busca.")
+            else:
+                selected = []
+                for match in matches:
+                    label = f"{match.symbol} — {match.name} ({match.exchange}, {match.quote_type})"
+                    if st.checkbox(label, key=f"match_{match.symbol}"):
+                        selected.append(match.symbol)
+                if selected and st.button(f"Adicionar {len(selected)} selecionada(s) à watchlist"):
+                    with st.spinner("Buscando preço, fundamentalista e elegibilidade de derivativo..."):
+                        added, invalid = watchlist_module.add_tickers(selected)
+                    st.success(f"Adicionados/atualizados: {', '.join(e.symbol for e in added)}")
+                    if invalid:
+                        st.warning(f"Falharam: {invalid}")
+                    st.rerun()
+
+    with tab_paste:
+        raw_tickers = st.text_area("Um ticker por linha ou separados por vírgula (ex.: AAPL, PETR4.SA, TAEE11.SA)")
+        if st.button("Adicionar tickers digitados"):
+            tickers = [t.strip() for chunk in raw_tickers.splitlines() for t in chunk.split(",") if t.strip()]
+            if not tickers:
+                st.warning("Nenhum ticker digitado.")
+            else:
+                with st.spinner(f"Validando e buscando dados de {len(tickers)} ticker(s)..."):
+                    added, invalid = watchlist_module.add_tickers(tickers)
+                if added:
+                    st.success(f"Adicionados/atualizados: {', '.join(e.symbol for e in added)}")
+                if invalid:
+                    st.error("Falharam:\n" + "\n".join(f"- {ticker}: {reason}" for ticker, reason in invalid.items()))
+                st.rerun()
 
     st.subheader("Watchlist atual")
     watchlist_df = _load_watchlist_df()
