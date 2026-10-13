@@ -28,10 +28,22 @@ from finstrategy.data import local_stock_list, symbol_search, watchlist as watch
 from finstrategy.data.errors import MarketDataError
 from finstrategy.data.watchlist import DEFAULT_DATA_STORE_ROOT, DEFAULT_WATCHLIST_PATH
 from finstrategy.data.yahoo_provider import YahooProvider
+from finstrategy.pricing.garch_montecarlo import TRADING_DAYS_PER_YEAR
+from finstrategy.reporting import charts, model_store
 from finstrategy.reporting.panel import build_panel_dataframe, build_plain_language_summary
 from finstrategy.reporting.pdf_report import generate_pdf_report
 from finstrategy.rl.entry_dqn import evaluate_entry_timing
-from finstrategy.strategy.protective_put import analyze_ticker
+from finstrategy.rl.exit_dqn import evaluate_exit_timing
+from finstrategy.strategy.exit_timing_bs import recommend_exit_day, time_value_curve
+from finstrategy.strategy.protective_put import ProtectivePutPlan, analyze_ticker
+from finstrategy.strategy.risk_analysis import RiskAnalysis, build_risk_analysis
+
+RISK_METRIC_HELP = {
+    "perda máxima": "Quanto você pode perder no pior caso, já incluindo taxas — é o valor final, contratual (não depende de modelo).",
+    "ES 97,5% sem → com put": "Perda média nos 2,5% piores cenários simulados: sem proteção → com a put. Quanto menor o segundo número, melhor a proteção.",
+    "P(perda) com put": "Em quantos % dos cenários simulados (Monte Carlo) você ainda termina no prejuízo, mesmo com a proteção.",
+    "entrada (DQN)": "O que o modelo de IA recomenda hoje: comprar agora ou esperar por um preço melhor nos próximos dias úteis.",
+}
 
 st.set_page_config(page_title="finstrategy", layout="wide")
 
@@ -58,7 +70,7 @@ _init_state()
 
 PAGE = st.sidebar.radio(
     "Navegação",
-    ["Ações", "Configuração", "Rodar agora", "Histórico & Relatórios", "Coletor", "Modelos"],
+    ["Ações", "Configuração", "Histórico & Relatórios", "Coletor", "Modelos"],
 )
 
 
@@ -121,21 +133,21 @@ def _format_quotes_table(df: pd.DataFrame) -> pd.DataFrame:
     return table.sort_values("Coletado em", ascending=False) if "Coletado em" in table else table
 
 
-def run_full_pipeline(tickers: list[str], settings: AnalysisSettings, progress_label: str = "") -> tuple[dict, dict, dict]:
+def run_full_pipeline(tickers: list[str], settings: AnalysisSettings, progress_label: str = "") -> tuple[dict, dict, dict, float]:
     """Roda DQN de entrada + put de proteção (quando elegível) para uma lista de
-    tickers. Compartilhado pelas telas "Rodar agora" e "Histórico & Relatórios" (botão
-    "Gerar novo relatório") para não duplicar a lógica."""
+    tickers. Chamado pela tela "Histórico & Relatórios" (botão "Gerar novo relatório").
+    Devolve `risk_free_rate` junto (já buscada aqui) pra `render_risk_analysis_section`
+    não precisar buscar de novo."""
     results, not_eligible, entry_evaluations = {}, {}, {}
-    if not tickers:
-        return results, not_eligible, entry_evaluations
-
-    progress = st.progress(0.0, text=progress_label or "Iniciando...")
     try:
         risk_free_rate = PROVIDER.get_risk_free_rate()
     except MarketDataError as reason:
         st.error(f"Não foi possível obter a taxa livre de risco: {reason}")
         risk_free_rate = 0.05
+    if not tickers:
+        return results, not_eligible, entry_evaluations, risk_free_rate
 
+    progress = st.progress(0.0, text=progress_label or "Iniciando...")
     for index, ticker in enumerate(tickers):
         progress.progress(index / len(tickers), text=f"Analisando {ticker}...")
         try:
@@ -152,13 +164,104 @@ def run_full_pipeline(tickers: list[str], settings: AnalysisSettings, progress_l
             not_eligible[ticker] = f"erro inesperado: {unexpected}"
         progress.progress((index + 1) / len(tickers), text=f"{ticker} concluído")
     progress.empty()
-    return results, not_eligible, entry_evaluations
+    return results, not_eligible, entry_evaluations, risk_free_rate
 
 
-def render_pipeline_results(tickers: list[str], results: dict, not_eligible: dict, entry_evaluations: dict) -> list:
+def render_risk_analysis_section(ticker: str, result: dict, entry_evaluation: dict | None, risk_free_rate: float, settings: AnalysisSettings) -> None:
+    """Seção "📊 Análise de Risco" (plan.md, seção 11): Black-Scholes explica o preço
+    da opção e diz quantos dias até considerar vender; a distribuição Monte Carlo já
+    calculada vira leitura de tendência; e as três noções de "confiança" ficam
+    deliberadamente separadas (nunca um número único genérico — ver `risk_analysis.py`)."""
+    analysis = build_risk_analysis(ticker, result, risk_free_rate, settings)
+    plan = analysis.plan
+
+    st.markdown("##### 📊 Análise de Risco")
+
+    expensive_or_cheap = "mais cara" if analysis.price_diff_pct > 0 else "mais barata"
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(
+        "Perda máxima com proteção", f"{plan.max_loss_pct:.1%}",
+        help="O pior resultado possível, mesmo se a ação for a zero — já inclui taxas; é contratual, não depende de modelo.",
+    )
+    col2.metric(
+        "Prêmio pago vs. teórico (Black-Scholes)", f"{analysis.price_diff_pct:+.1%}",
+        help=(
+            f"Preço teórico (Black-Scholes, com a volatilidade implícita do mercado): {analysis.greeks.price:,.2f}. "
+            f"Prêmio realmente pago: {plan.put_premium:,.2f}. Positivo = você pagou mais do que o modelo acha que "
+            f"a opção vale ({expensive_or_cheap})."
+        ),
+    )
+    col3.metric(
+        "Considere vender até", analysis.exit_date_estimate.strftime("%d/%m/%Y"),
+        help=f"{analysis.exit_recommendation['reason']} — regra fixa de Black-Scholes, dia {analysis.exit_recommendation['exit_day']} de pregão a partir de hoje.",
+    )
+    if entry_evaluation is not None:
+        confidence_text = "Bateu benchmarks" if entry_evaluation.get("beats_benchmarks") else "Sinal fraco"
+        p_value = entry_evaluation.get("p_value_vs_first_day", float("nan"))
+        col4.metric(
+            "Confiança do sinal de entrada", confidence_text,
+            help=(
+                f"p-valor vs. comprar no 1º dia: {p_value:.3f} (abaixo de 0,05 = significativo). "
+                "É a confiança ESTATÍSTICA do sinal da DQN — não é garantia de preço."
+            ),
+        )
+    else:
+        col4.metric("Confiança do sinal de entrada", "—", help="DQN de entrada não avaliada para este ativo nesta rodada.")
+
+    trend_col1, trend_col2 = st.columns(2)
+    with trend_col1:
+        st.write("**Tendência simulada do preço da ação**")
+        st.write(
+            f"P(acima de hoje): {analysis.prob_price_up:.0%} · P(abaixo de hoje): {analysis.prob_price_down:.0%}  \n"
+            f"Preço médio esperado no vencimento: {analysis.expected_price:,.2f} "
+            f"(faixa de 90%: {analysis.price_range_90[0]:,.2f} a {analysis.price_range_90[1]:,.2f})"
+        )
+    with trend_col2:
+        st.write("**Tendência simulada do valor da put (se mantida até o vencimento)**")
+        st.write(
+            f"Valor esperado: {analysis.expected_put_payoff_at_expiration:,.2f}  \n"
+            f"Faixa de 90%: {analysis.put_payoff_range_90[0]:,.2f} a {analysis.put_payoff_range_90[1]:,.2f}"
+        )
+    st.caption(
+        "Simulação Monte Carlo calibrada no histórico real (GARCH-t) — não é garantia, é uma distribuição de "
+        "cenários possíveis. O Monte Carlo é neutro ao risco por construção, não aposta em direção."
+    )
+
+    st.pyplot(charts.plot_time_value_curve(analysis.time_value_curve_df, analysis.exit_recommendation), clear_figure=True)
+    st.caption(
+        "Quanto do valor da proteção que você pagou ainda resta, dia a dia (Black-Scholes, preço da ação fixo no "
+        "atual, isola o efeito do tempo passando). A linha vermelha marca o dia recomendado para considerar vender."
+    )
+
+    with st.expander("🔧 Detalhes técnicos da análise de risco"):
+        st.write("**Greeks da strike recomendada (Black-Scholes)**")
+        st.json({
+            "preço teórico": round(analysis.greeks.price, 4), "delta": round(analysis.greeks.delta, 4),
+            "theta (por dia)": round(analysis.greeks.theta / 365, 4), "vega (por 1 p.p. de vol.)": round(analysis.greeks.vega / 100, 4),
+            "gamma": round(analysis.greeks.gamma, 6), "volatilidade implícita usada": round(plan.implied_volatility, 4),
+        })
+        st.caption(
+            "delta: quanto a put ganha de valor pra cada R$1 que a ação cai. theta: quanto a put perde de valor "
+            "por dia só de o tempo passar. vega: quanto a put ganha/perde se a volatilidade do mercado mudar 1 p.p."
+        )
+        st.write("**Precisão da simulação Monte Carlo** (não é confiança direcional)")
+        st.write(
+            f"Intervalo de confiança de 95% do preço médio simulado: {analysis.price_mean_ci_95[0]:,.2f} a "
+            f"{analysis.price_mean_ci_95[1]:,.2f} (largura = {analysis.mc_precision_pct:.1%} da média)."
+        )
+        st.caption(
+            "Isso mede o quão preciso é o CÁLCULO da simulação (mais caminhos simulados = intervalo mais estreito), "
+            "não se o preço vai subir ou descer."
+        )
+
+
+def render_pipeline_results(tickers: list[str], results: dict, not_eligible: dict, entry_evaluations: dict, settings: AnalysisSettings, risk_free_rate: float = 0.05) -> list:
     st.subheader("Painel técnico")
     panel = build_panel_dataframe(results, not_eligible, entry_evaluations)
-    st.dataframe(panel, width="stretch")
+    column_config = {col: st.column_config.Column(help=text) for col, text in RISK_METRIC_HELP.items() if col in panel.columns}
+    st.dataframe(panel, width="stretch", column_config=column_config)
+    if column_config:
+        st.caption("💡 Passe o mouse sobre o nome de uma coluna técnica para ver o que ela significa.")
 
     summaries = [
         build_plain_language_summary(ticker, results.get(ticker), entry_evaluations.get(ticker), not_eligible.get(ticker))
@@ -169,7 +272,108 @@ def render_pipeline_results(tickers: list[str], results: dict, not_eligible: dic
         st.markdown(f"**{summary.headline}**")
         for line in summary.body_lines:
             st.write(f"- {line}")
+
+    chartable_tickers = [t for t in tickers if results.get(t) is not None or entry_evaluations.get(t) is not None]
+    if chartable_tickers:
+        st.subheader("Gráficos")
+        for ticker in chartable_tickers:
+            result = results.get(ticker)
+            evaluation = entry_evaluations.get(ticker)
+            with st.expander(f"📊 {ticker}", expanded=(len(chartable_tickers) == 1)):
+                if result is not None:
+                    try:
+                        render_risk_analysis_section(ticker, result, evaluation, risk_free_rate, settings)
+                        st.divider()
+                    except Exception as unexpected:
+                        st.warning(f"Análise de risco indisponível: {unexpected}")
+                    try:
+                        st.pyplot(charts.plot_strike_menu(ticker, result, settings.max_acceptable_loss_pct), clear_figure=True)
+                        st.caption(
+                            "Cada ponto é uma strike real disponível no Yahoo. Mais à direita = proteção mais cara; "
+                            "mais pra cima = mais risco mesmo com a put. A bolinha laranja é a recomendada."
+                        )
+                        st.pyplot(charts.plot_protection_payoff(ticker, result, settings), clear_figure=True)
+                        st.caption(
+                            "Em cima: quanto você ganha/perde no vencimento, com e sem a put, para cada preço possível da ação. "
+                            "Embaixo: a distribuição de preços simulada (de onde vêm as métricas de risco da tabela acima)."
+                        )
+                    except Exception as unexpected:
+                        st.warning(f"Gráfico de proteção indisponível: {unexpected}")
+                if evaluation is not None:
+                    try:
+                        st.pyplot(charts.plot_entry_evaluation(ticker, evaluation), clear_figure=True)
+                        st.caption(
+                            "Economia média de cada estratégia de entrada, testada num pedaço dos dados que o modelo nunca viu. "
+                            "Se a barra laranja (DQN) não estiver claramente à direita das outras, trate o sinal com cautela."
+                        )
+                    except Exception as unexpected:
+                        st.warning(f"Gráfico da DQN indisponível: {unexpected}")
     return summaries
+
+
+def _model_card_summary_row(summary, name: str) -> dict:
+    if isinstance(summary, pd.DataFrame):
+        return summary.loc[name].to_dict()
+    return dict(summary[name])
+
+
+def render_model_card(ticker: str, model_type: str, evaluation: dict, hyperparameters: dict, trained_at: str) -> None:
+    """Explica o modelo pra dois públicos ao mesmo tempo (plan.md, seção 10.3):
+    parágrafo simples visível de cara, números crus atrás de um expander técnico."""
+    is_entry = model_type == "entry"
+    dqn_row = _model_card_summary_row(evaluation["summary"], "DQN")
+    beats_benchmarks = bool(evaluation.get("beats_benchmarks", False))
+
+    if is_entry:
+        value = dqn_row["economia média (%)"]
+        value_label, value_str = "Economia média vs. comprar no 1º dia", f"{value:+.2f}%"
+        ci_str = f"{dqn_row['IC 95% inferior']:+.2f}% a {dqn_row['IC 95% superior']:+.2f}%"
+        sinal = evaluation.get("today_action", "—")
+    else:
+        value = dqn_row["valor médio realizado"]
+        value_label, value_str = "Valor médio realizado ao sair", f"{value:,.2f}"
+        ci_str = f"{dqn_row['IC 95% inferior']:,.2f} a {dqn_row['IC 95% superior']:,.2f}"
+        sinal = "—"
+
+    verdict = "bateu as referências com significância estatística" if beats_benchmarks else "**não** bateu as referências com significância — trate o sinal com cautela"
+    plain_text = (
+        f"Esse modelo foi avaliado num pedaço dos dados que ele nunca viu durante o treino (treino e teste "
+        f"separados, do jeito certo). Em média, {value_label.lower()} foi de **{value_str}** "
+        f"(intervalo de confiança de 95%: {ci_str}). Isso significa que o modelo {verdict}."
+    )
+    if is_entry:
+        plain_text += f" Sinal de hoje: **{sinal}**."
+
+    st.markdown(f"#### {ticker} — DQN de {'entrada (quando comprar a ação)' if is_entry else 'saída (quando vender a put)'}")
+    st.caption(f"Treinado em {str(trained_at)[:19].replace('T', ' ')}")
+    st.info(plain_text)
+
+    metric_cols = st.columns(3) if is_entry else st.columns(2)
+    metric_cols[0].metric(value_label, value_str)
+    metric_cols[1].metric("Bateu os benchmarks?", "Sim ✅" if beats_benchmarks else "Não ⚠️")
+    if is_entry:
+        metric_cols[2].metric("Sinal de hoje", sinal)
+
+    with st.expander("🔧 Detalhes técnicos"):
+        st.write("**Métricas completas** (todas as estratégias comparadas, com intervalo de confiança de 95%)")
+        summary_df = evaluation["summary"] if isinstance(evaluation["summary"], pd.DataFrame) else pd.DataFrame(evaluation["summary"]).T
+        st.dataframe(summary_df, width="stretch")
+        p_value_keys = [k for k in evaluation if k.startswith("p_value")]
+        if p_value_keys:
+            st.write("**P-valores** (abaixo de 0,05 = diferença estatisticamente significativa)")
+            st.json({k: float(evaluation[k]) for k in p_value_keys})
+        st.write("**Hiperparâmetros usados no treino**")
+        relevant_keys = (
+            ["dqn_training_rounds", "dqn_hidden_units", "entry_window_days", "test_period_fraction", "monte_carlo_paths", "random_seed"]
+            if is_entry else
+            ["exit_dqn_training_rounds", "exit_dqn_hidden_units", "exit_time_value_floor_pct", "monte_carlo_paths", "random_seed"]
+        )
+        st.json({key: hyperparameters.get(key) for key in relevant_keys})
+        st.caption(
+            "Explicação técnica: a rede é um MLP de 2 camadas (Double DQN), treinada só com dados antigos e "
+            "avaliada num período que nunca viu. 'Bateu os benchmarks' exige economia/valor médio positivo E "
+            "p-valor < 0,05 contra as referências — não é só 'deu lucro uma vez'."
+        )
 
 
 def generate_and_offer_pdf(summaries: list, key_suffix: str = "") -> None:
@@ -332,23 +536,6 @@ elif PAGE == "Configuração":
 
 
 # --------------------------------------------------------------------------------------
-# Tela "Rodar agora" — pipeline completo manual + PDF
-# --------------------------------------------------------------------------------------
-elif PAGE == "Rodar agora":
-    st.title("Rodar o pipeline agora")
-    watchlist_df = _load_watchlist_df()
-    if watchlist_df.empty:
-        st.warning("Watchlist vazia. Adicione ações na tela 'Ações' primeiro.")
-    else:
-        chosen_tickers = st.multiselect("Ativos para analisar", list(watchlist_df["symbol"]), default=list(watchlist_df["symbol"]))
-        if st.button("Rodar análise completa") and chosen_tickers:
-            settings = load_settings()
-            results, not_eligible, entry_evaluations = run_full_pipeline(chosen_tickers, settings)
-            summaries = render_pipeline_results(chosen_tickers, results, not_eligible, entry_evaluations)
-            generate_and_offer_pdf(summaries, key_suffix="rodar_agora")
-
-
-# --------------------------------------------------------------------------------------
 # Tela "Histórico & Relatórios" — cotação e fundamentalista claros + gerar relatório
 # --------------------------------------------------------------------------------------
 elif PAGE == "Histórico & Relatórios":
@@ -371,8 +558,8 @@ elif PAGE == "Histórico & Relatórios":
         if quotes_frame.empty:
             st.info(
                 "Nenhuma cotação coletada ainda para este ticker — isso só acontece via o "
-                "Coletor contínuo (tela 'Coletor'). 'Rodar agora' busca o preço na hora, mas "
-                "não grava no histórico de cotações."
+                "Coletor contínuo (tela 'Coletor'). O botão 'Gerar novo relatório agora', mais "
+                "abaixo, busca o preço na hora, mas não grava no histórico de cotações."
             )
         else:
             quotes_frame = quotes_frame.sort_values("collected_at", ascending=False)
@@ -406,17 +593,59 @@ elif PAGE == "Histórico & Relatórios":
                     display_value = fmt.format(value)
                 cols[index % 3].metric(label, display_value)
             st.caption(f"Setor: {latest_fundamentals.get('sector', '—')} · Indústria: {latest_fundamentals.get('industry', '—')} · Coletado em {str(latest_fundamentals.get('collected_at', ''))[:19].replace('T', ' ')}")
-            with st.expander("Ver todos os indicadores e histórico de coletas"):
+            with st.expander("📄 Ver todos os indicadores (dado bruto, como veio do Yahoo) e histórico de coletas"):
                 st.dataframe(_format_fundamentals_table(fundamentals_frame.sort_values("collected_at", ascending=False)), width="stretch")
+
+        st.subheader(f"Dados brutos — {ticker}")
+        st.caption(
+            "Histórico de preço completo (o que os modelos realmente usam pra treinar) e a cadeia de opções "
+            "mais recente, direto do Yahoo — pra quem quer auditar/conferir de onde vêm os números do sistema."
+        )
+        if st.button("🔍 Carregar dados brutos", key="load_raw_data"):
+            raw_settings = load_settings()
+            with st.spinner("Baixando histórico completo de preço..."):
+                try:
+                    full_history = PROVIDER.download_price_history(ticker, raw_settings.history_start_date)
+                    history_table = full_history.rename("Preço de fechamento").reset_index()
+                    history_table.columns = ["Data", "Preço de fechamento"]
+                    st.line_chart(full_history)
+                    st.caption(f"{len(history_table)} pontos, de {history_table['Data'].min().date()} até {history_table['Data'].max().date()}.")
+                    with st.expander("Ver tabela completa"):
+                        st.dataframe(history_table, width="stretch")
+                    st.download_button(
+                        "Baixar histórico de preço em CSV", history_table.to_csv(index=False), file_name=f"{ticker}_historico_precos.csv",
+                        mime="text/csv", key="dl_raw_history",
+                    )
+                except Exception as unexpected:
+                    st.error(f"Não consegui baixar o histórico completo agora: {unexpected}")
+
+            entry = next((e for e in watchlist_module.load_watchlist() if e.symbol == ticker), None)
+            if entry and entry.elegivel_derivativo:
+                with st.spinner("Buscando cadeia de opções (puts líquidas)..."):
+                    try:
+                        risk_free_rate = PROVIDER.get_risk_free_rate()
+                        raw_result = analyze_ticker(ticker, PROVIDER, risk_free_rate, raw_settings)
+                        st.write(f"**Cadeia de opções líquidas** — vencimento {raw_result['expiration'].date()}")
+                        st.dataframe(raw_result["liquid_puts"], width="stretch")
+                        st.download_button(
+                            "Baixar cadeia de opções em CSV", raw_result["liquid_puts"].to_csv(index=False),
+                            file_name=f"{ticker}_opcoes.csv", mime="text/csv", key="dl_raw_options",
+                        )
+                    except MarketDataError as reason:
+                        st.info(f"Sem cadeia de opções elegível agora: {reason}")
+                    except Exception as unexpected:
+                        st.warning(f"Não consegui buscar a cadeia de opções agora: {unexpected}")
+            else:
+                st.caption("Este ticker não tem opções no Yahoo — sem cadeia pra mostrar.")
 
     st.divider()
     st.subheader("Relatórios")
-    st.caption("Gera a análise completa (ação + put de proteção + DQN de entrada) para os tickers escolhidos e um PDF para download, sem precisar ir até 'Rodar agora'.")
+    st.caption("Gera a análise completa (ação + put de proteção + DQN de entrada), com gráficos e PDF para download.")
     report_tickers = st.multiselect("Ativos para o novo relatório", tickers, default=tickers, key="report_tickers")
     if st.button("Gerar novo relatório agora", key="generate_report_button") and report_tickers:
-        settings = load_settings()
-        results, not_eligible, entry_evaluations = run_full_pipeline(report_tickers, settings)
-        summaries = render_pipeline_results(report_tickers, results, not_eligible, entry_evaluations)
+        report_settings = load_settings()
+        results, not_eligible, entry_evaluations, risk_free_rate = run_full_pipeline(report_tickers, report_settings)
+        summaries = render_pipeline_results(report_tickers, results, not_eligible, entry_evaluations, report_settings, risk_free_rate)
         generate_and_offer_pdf(summaries, key_suffix="historico")
 
     st.subheader("Relatórios já gerados")
@@ -501,31 +730,99 @@ elif PAGE == "Coletor":
 
 
 # --------------------------------------------------------------------------------------
-# Tela "Modelos" — reavaliar DQN de entrada (e saída, quando elegível)
+# Tela "Modelos" — treinar/carregar DQN de entrada e saída, com "model card" explicado
 # --------------------------------------------------------------------------------------
 elif PAGE == "Modelos":
     st.title("Modelos (DQN)")
-    watchlist_df = _load_watchlist_df()
-    if watchlist_df.empty:
-        st.warning("Watchlist vazia.")
-    else:
-        ticker = st.selectbox("Ticker", list(watchlist_df["symbol"]))
-        if st.button("Treinar e avaliar"):
-            settings = load_settings()
-            with st.spinner(f"Baixando histórico e treinando DQN de entrada para {ticker}..."):
+    st.caption(
+        "Cada modelo responde a uma pergunta: a DQN de **entrada** diz se vale comprar a ação hoje ou esperar; "
+        "a de **saída** diz se vale manter ou vender a put de proteção antes do vencimento. "
+        "Pra quem não é técnico: o parágrafo em destaque já basta. Pra quem é técnico: abra "
+        "'Detalhes técnicos' em cada modelo pra ver pesos, hiperparâmetros e as métricas completas."
+    )
+
+    tab_saved, tab_train = st.tabs(["📂 Modelos salvos", "🧠 Treinar novo"])
+
+    with tab_saved:
+        index = model_store.list_models()
+        if index.empty:
+            st.info("Nenhum modelo salvo ainda — treine um na aba 'Treinar novo' (fica salvo em `.pkl`, não precisa retreinar depois).")
+        else:
+            display_index = index.rename(columns={
+                "ticker": "Ticker", "model_type": "Tipo", "trained_at": "Treinado em", "metrica_principal": "Métrica principal",
+                "valor_principal": "Valor", "bateu_benchmark": "Bateu benchmark?", "sinal_hoje": "Sinal de hoje",
+            })
+            display_index["Tipo"] = display_index["Tipo"].map({"entry": "Entrada", "exit": "Saída"})
+            display_index["Bateu benchmark?"] = display_index["Bateu benchmark?"].astype(str).map({"True": "Sim", "False": "Não"}).fillna(display_index["Bateu benchmark?"])
+            st.dataframe(display_index.drop(columns=["filename"], errors="ignore"), width="stretch")
+
+            chosen_filename = st.selectbox("Carregar um modelo salvo (sem retreinar)", index["filename"])
+            if st.button("Carregar modelo"):
+                payload = model_store.load_model(chosen_filename)
+                render_model_card(payload["ticker"], payload["model_type"], payload["evaluation"], payload["hyperparameters"], payload["trained_at"])
+                st.download_button(
+                    "Baixar este modelo (.pkl)", (model_store.DEFAULT_MODELS_DIR / chosen_filename).read_bytes(),
+                    file_name=chosen_filename, mime="application/octet-stream",
+                )
+
+    with tab_train:
+        watchlist_df = _load_watchlist_df()
+        if watchlist_df.empty:
+            st.warning("Watchlist vazia. Adicione ações na tela 'Ações' primeiro.")
+        else:
+            ticker = st.selectbox("Ticker", list(watchlist_df["symbol"]), key="train_ticker")
+            entries = watchlist_module.load_watchlist()
+            entry = next((e for e in entries if e.symbol == ticker), None)
+            type_options = ["Entrada (quando comprar a ação)"]
+            if entry and entry.elegivel_derivativo:
+                type_options.append("Saída (quando vender a put)")
+            else:
+                st.caption("Este ticker não tem opções no Yahoo — só a DQN de entrada está disponível para ele.")
+            type_label = st.radio("Qual modelo treinar?", type_options)
+            model_type = "exit" if type_label.startswith("Saída") else "entry"
+
+            if st.button("Treinar e salvar"):
+                settings = load_settings()
+                evaluation = None
                 try:
-                    closes = PROVIDER.download_price_history(ticker, settings.history_start_date)
-                    evaluation = evaluate_entry_timing(ticker, closes, settings)
+                    if model_type == "entry":
+                        with st.spinner(f"Baixando histórico e treinando DQN de entrada para {ticker}..."):
+                            closes = PROVIDER.download_price_history(ticker, settings.history_start_date)
+                            evaluation = evaluate_entry_timing(ticker, closes, settings)
+                    else:
+                        with st.spinner(f"Montando a put de proteção e treinando DQN de saída para {ticker}..."):
+                            risk_free_rate = PROVIDER.get_risk_free_rate()
+                            result = analyze_ticker(ticker, PROVIDER, risk_free_rate, settings)
+                            chosen = result["recommended"]
+                            plan = ProtectivePutPlan(**{key: chosen[key] for key in ProtectivePutPlan.__dataclass_fields__})
+                            window_days = max(int(round(plan.days_to_expiration * TRADING_DAYS_PER_YEAR / 365)), 1)
+                            curve = time_value_curve(plan, risk_free_rate, result["dividend_yield"], window_days)
+                            fixed_rule = recommend_exit_day(curve, settings.exit_time_value_floor_pct)
+                            evaluation = evaluate_exit_timing(
+                                plan, result["garch"], risk_free_rate, result["dividend_yield"], window_days, settings, fixed_rule["exit_day"],
+                            )
+                except MarketDataError as reason:
+                    st.error(f"Não foi possível treinar: {reason}")
                 except Exception as unexpected:
                     st.error(f"Falhou: {unexpected}")
-                    evaluation = None
 
-            if evaluation:
-                st.subheader("DQN de entrada — avaliação honesta (treino/teste separados)")
-                st.dataframe(evaluation["summary"], width="stretch")
-                verdict = "bateu" if evaluation["beats_benchmarks"] else "não bateu"
-                st.write(
-                    f"A DQN **{verdict}** as referências com significância "
-                    f"(p-valor vs. 1º dia = {evaluation['p_value_vs_first_day']:.2f}). "
-                    f"Sinal de hoje: **{evaluation['today_action']}**."
+                if evaluation is not None:
+                    saved_path = model_store.save_model(ticker, model_type, evaluation, settings)
+                    # st.tabs roda o conteúdo das DUAS abas na mesma execução, em ordem de código —
+                    # "Modelos salvos" vem antes de "Treinar novo", então leria o índice antes do
+                    # save_model acima rodar nesta mesma rodada. Guarda em session_state + st.rerun()
+                    # pra "Modelos salvos" já aparecer atualizado e o card continuar visível aqui.
+                    st.session_state["last_trained_model"] = {
+                        "ticker": ticker, "model_type": model_type, "evaluation": evaluation,
+                        "hyperparameters": settings.to_dict(), "trained_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+                        "saved_filename": saved_path.name,
+                    }
+                    st.rerun()
+
+            last_trained = st.session_state.get("last_trained_model")
+            if last_trained:
+                st.success(f"Modelo treinado e salvo em `{last_trained['saved_filename']}` — disponível na aba 'Modelos salvos' sem precisar retreinar.")
+                render_model_card(
+                    last_trained["ticker"], last_trained["model_type"], last_trained["evaluation"],
+                    last_trained["hyperparameters"], last_trained["trained_at"],
                 )
