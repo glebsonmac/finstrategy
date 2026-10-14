@@ -59,3 +59,10 @@ def fundamentals_csv_path(data_store_root: Path | str, ticker: str) -> Path:
 def reports_csv_path(data_store_root: Path | str, as_of_date) -> Path:
     date_str = pd.Timestamp(as_of_date).strftime("%Y-%m-%d")
     return Path(data_store_root) / "reports" / f"{date_str}.csv"
+
+
+def report_pdf_path(data_store_root: Path | str, generated_at) -> Path:
+    """Um arquivo por geração (data + hora), não por dia — gerar duas vezes no mesmo
+    dia não deve sobrescrever o relatório anterior."""
+    timestamp_str = pd.Timestamp(generated_at).strftime("%Y-%m-%d_%H-%M-%S")
+    return Path(data_store_root) / "reports" / f"{timestamp_str}.pdf"

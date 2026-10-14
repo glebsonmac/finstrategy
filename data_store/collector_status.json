@@ -1,10 +1,10 @@
 {
-  "started_at": "2026-10-13T14:42:52",
-  "iterations": 2,
+  "started_at": "2026-10-14T08:41:43",
+  "iterations": 1,
   "last_error": null,
-  "updated_at": "2026-10-13T14:44:38",
-  "last_check_at": "2026-10-13T14:44:09",
-  "market_open": true,
+  "updated_at": "2026-10-14T08:41:55",
+  "last_check_at": "2026-10-14T08:41:43",
+  "market_open": false,
   "last_collection_at": "2026-10-13T14:44:09",
   "last_model_run_at": null,
   "last_cycle_tickers": [
@@ -27,5 +27,5 @@
       "status": "ok"
     }
   ],
-  "stopped_at": "2026-10-13T14:44:38"
+  "stopped_at": "2026-10-14T08:41:55"
 }

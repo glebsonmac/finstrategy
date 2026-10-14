@@ -1,15 +1,43 @@
 """Painel final: uma linha por ativo, com o que o usuário precisa para decidir.
 
 Extraído/generalizado da seção 10 do notebook `put_de_protecao_DQN_montecarlos.ipynb`.
-Separado em duas camadas: `build_panel_dataframe` (tabela técnica, para a tela
-"Histórico" do frontend) e `build_plain_language_summary` (texto direto, sem jargão,
-para o PDF do usuário não técnico — seção 7 do plano).
+Separado em camadas: `build_panel_dataframe` (tabela técnica, para a tela "Histórico"
+do frontend), `build_plain_language_summary` (texto direto, sem jargão, para o PDF do
+usuário não técnico — seção 7 do plano), e o restante do conteúdo das seções 8 e 9 do
+notebook (menu completo de strikes, avaliação da DQN de entrada) — que o relatório do
+Streamlit/PDF só mostrava parcialmente (só o gráfico, sem a tabela/texto por trás) e
+agora replica integralmente. A seção 11 do notebook (limitações/referências) fica só
+no notebook, por decisão do usuário — não é conteúdo do relatório do app/PDF.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import pandas as pd
+
+# Seção 8 do notebook: tabela com todas as strikes disponíveis, não só a recomendada.
+MENU_COLUMNS = {
+    "strike": "strike (venda garantida/ação)", "put_premium": "prêmio da put", "quote_source": "preço usado",
+    "guaranteed_sale_value": "venda garantida (posição)", "total_cost": "custo total", "max_loss_total": "perda máx.",
+    "max_loss_pct": "perda máx. %", "breakeven_price": "break-even", "breakeven_change_pct": "break-even vs. hoje",
+    "protection_cost_pct": "custo da proteção", "annualized_protection_cost_pct": "custo anualizado",
+    "P(exercer a put)": "P(exercer)", "P(perda) (com put)": "P(perda) com put",
+    "ES 97,5% (sem put)": "ES sem put", "ES 97,5% (com put)": "ES com put",
+    "custo líquido esperado %": "custo líq. esperado",
+}
+MENU_FORMATS = {
+    "strike (venda garantida/ação)": "{:,.2f}", "prêmio da put": "{:,.2f}", "venda garantida (posição)": "{:,.0f}",
+    "custo total": "{:,.0f}", "perda máx.": "{:,.0f}", "perda máx. %": "{:.1%}", "break-even": "{:,.2f}",
+    "break-even vs. hoje": "{:+.1%}", "custo da proteção": "{:.2%}", "custo anualizado": "{:.1%}",
+    "P(exercer)": "{:.0%}", "P(perda) com put": "{:.0%}", "ES sem put": "{:.1%}", "ES com put": "{:.1%}",
+    "custo líq. esperado": "{:+.2%}",
+}
+
+# Seção 9/10 do notebook: tabela de avaliação da DQN de entrada (4 estratégias comparadas).
+ENTRY_SUMMARY_FORMATS = {
+    "economia média (%)": "{:+.2f}", "IC 95% inferior": "{:+.2f}",
+    "IC 95% superior": "{:+.2f}", "% janelas melhores que o 1º dia": "{:.0%}",
+}
 
 
 def describe_entry_signal(evaluation: dict | None) -> str:
@@ -51,6 +79,48 @@ def build_panel_dataframe(results: dict, not_eligible: dict, entry_evaluations: 
             "comprar": f"não elegível a derivativo: {reason}" if evaluation is None else f"ação apenas (sem derivativo): {reason}",
         })
     return pd.DataFrame(rows).set_index("ativo").fillna("") if rows else pd.DataFrame()
+
+
+def build_strike_menu_header(ticker: str, result: dict) -> str:
+    """Linha de contexto acima da tabela de strikes — notebook, seção 8."""
+    chosen = result["recommended"]
+    contracts = chosen["contracts"]
+    return (
+        f"{ticker} · preço {result['stock_price']:,.2f} · {result['shares']} ações "
+        f"({contracts} {'contrato' if contracts == 1 else 'contratos'}) · vencimento "
+        f"{result['expiration'].date()} · vol. atual (GARCH) {result['garch'].current_annual_volatility:.1%}"
+    )
+
+
+def build_strike_menu_table(result: dict) -> pd.DataFrame:
+    """Tabela com todas as strikes disponíveis (não só a recomendada) — notebook, seção 8."""
+    menu = result["menu"]
+    recommended_strike = result["recommended"]["strike"]
+    table = menu[[column for column in MENU_COLUMNS if column in menu.columns]].rename(columns=MENU_COLUMNS)
+    table.index = ["► recomendada" if strike == recommended_strike else "" for strike in menu["strike"]]
+    for column, fmt in MENU_FORMATS.items():
+        if column in table.columns:
+            table[column] = table[column].map(fmt.format)
+    return table
+
+
+def build_entry_evaluation_table(evaluation: dict) -> pd.DataFrame:
+    """Tabela com as 4 estratégias de entrada comparadas (DQN vs. benchmarks) — notebook, seção 9."""
+    table = evaluation["summary"].copy()
+    for column, fmt in ENTRY_SUMMARY_FORMATS.items():
+        if column in table.columns:
+            table[column] = table[column].map(fmt.format)
+    return table
+
+
+def build_entry_evaluation_verdict(evaluation: dict) -> str:
+    """Parágrafo com o veredito estatístico da DQN de entrada — notebook, seção 9."""
+    verdict = "**bateu** as referências com significância" if evaluation["beats_benchmarks"] else "**não bateu** as referências com significância"
+    return (
+        f"A DQN {verdict} (p-valor vs. 1º dia = {evaluation['p_value_vs_first_day']:.2f}; vs. preço médio = "
+        f"{evaluation['p_value_vs_average']:.2f}). Em média comprou no dia {evaluation['average_purchase_day']:.1f} "
+        f"da janela. Sinal de hoje: **{evaluation['today_action']}**."
+    )
 
 
 @dataclass

@@ -507,3 +507,63 @@ calculado) reduziu bastante a superfície de coisas que podiam dar errado.
 150 testes automatizados passando ao final (eram 141 antes desta fase, +9 novos de
 `test_risk_analysis.py`). Frontend validado visualmente de ponta a ponta com dados
 reais; nenhum erro no log do servidor Streamlit.
+
+**2026-10-14 (sessão 8) — relatório do Streamlit/PDF igualado ao do notebook**
+
+Pedido do usuário: o relatório do Streamlit estava "incompleto" comparado ao notebook
+original. Comparação célula a célula confirmou 3 blocos de conteúdo que o notebook
+mostra e que nunca foram extraídos pra `src/` (só os gráficos derivados deles
+existiam, não os dados/texto por trás):
+1. Tabela completa de strikes por ativo (notebook, seção 8) — só existia como gráfico.
+2. Tabela de avaliação da DQN de entrada (4 estratégias + IC 95%) e o parágrafo de
+   veredito (p-valores, dia médio de compra) — só apareciam na tela "Modelos", não no
+   relatório principal.
+3. Seção "Limitações" (6 avisos) + referências acadêmicas (notebook, seção 11) — no
+   app/PDF virou uma frase genérica de disclaimer.
+
+Corrigido (itens 1 e 2 — item 3 revertido, ver abaixo): `reporting/panel.py` ganhou
+`MENU_COLUMNS`/`MENU_FORMATS`/`ENTRY_SUMMARY_FORMATS` (extraídos literalmente do
+notebook) + `build_strike_menu_header`/`build_strike_menu_table`/
+`build_entry_evaluation_table`/`build_entry_evaluation_verdict`. Wirado em
+`frontend/app.py` (`render_pipeline_results`, dentro do expander por ticker) e em
+`reporting/pdf_report.py` (`generate_pdf_report` ganhou os parâmetros opcionais
+`results`/`entry_evaluations`; cada página de ativo agora tem a tabela de strikes —
+dividida em 2 tabelas de 8 colunas pra caber na largura A4 — e a avaliação da DQN).
+
+Validado: PDF real gerado com dados sintéticos (menu de 5 strikes, avaliação de DQN
+com 4 estratégias) e lido de volta — tabelas e texto legíveis, sem estouro de página.
+Um bug cosmético encontrado e corrigido: o marcador "►" da strike recomendada
+(herdado do notebook) não existe na fonte Helvetica base do reportlab e virava um
+glifo errado no PDF — trocado por ">>" só no caminho do PDF (Streamlit continua
+usando "►", que renderiza bem no navegador).
+
+**Correção no mesmo dia (feedback do usuário após o primeiro teste):** 3 ajustes.
+1. **Limitações/referências removidas do Streamlit e do PDF** — o usuário esclareceu
+   que essa seção é só do notebook, não devia ter entrado no relatório do app/PDF.
+   Revertido: `LIMITATION_ITEMS`/`REFERENCE_ITEMS` tirados de `panel.py`, a seção
+   "Limitações"/"Referências" tirada de `render_pipeline_results` (app.py) e
+   `_limitations_and_references_flowables` removida de `pdf_report.py`.
+2. **PDF não baixava com dados reais.** Causa provável: `reportlab.Paragraph`
+   interpreta o texto como XML — qualquer `&`/`<`/`>` vindo de dado real (nome de
+   ativo, texto de erro) quebra a geração inteira, e o erro não aparecia pro usuário
+   porque a chamada de PDF não tinha try/except (a tela de resultado renderizava
+   normal, só o botão de download sumia, sem explicação). Corrigido: `_escape_xml`
+   novo em `pdf_report.py`, aplicado em todo texto dinâmico que vira `Paragraph`
+   (cabeçalhos/células das tabelas novas, headline/corpo do resumo em linguagem
+   simples); `generate_and_offer_pdf` (app.py) ganhou try/except com `st.error`
+   visível em vez de falhar em silêncio. Validado gerando um PDF com ticker/símbolo
+   contendo `&`/`<`/`>` de propósito — texto saiu correto (`&` literal, sem
+   `&amp;` vazando) via extração de texto do PDF gerado (`pypdf`).
+3. **Relatórios do mesmo dia se sobrescreviam.** `reports_csv_path` (usado antes pra
+   nomear o PDF via `.with_suffix(".pdf")`) particiona só por dia (`AAAA-MM-DD.pdf`),
+   então gerar dois relatórios no mesmo dia sobrescrevia o primeiro sem aviso.
+   `collector/csv_store.py` ganhou `report_pdf_path(data_store_root, generated_at)`,
+   particionado por dia+hora+minuto+segundo (`AAAA-MM-DD_HH-MM-SS.pdf`); `app.py`
+   passou a usá-la com `pd.Timestamp.now()`. A capa do PDF também passou a mostrar
+   a data/hora completa de geração (antes só a data), tanto no caminho padrão quanto
+   no texto visível pro usuário (`generate_pdf_report`, parâmetro `report_date`).
+
+150 testes seguem passando (nenhum teste automatizado novo — a lógica nova é
+composição de dados já testados em `test_protective_put.py`/`test_entry_dqn.py`/
+`test_csv_store.py`; cobertura ficou por validação manual do PDF gerado, incluindo o
+caso adversarial de caracteres XML-inseguros).

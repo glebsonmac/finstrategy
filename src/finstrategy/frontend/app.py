@@ -30,6 +30,7 @@ from finstrategy.data.watchlist import DEFAULT_DATA_STORE_ROOT, DEFAULT_WATCHLIS
 from finstrategy.data.yahoo_provider import YahooProvider
 from finstrategy.pricing.garch_montecarlo import TRADING_DAYS_PER_YEAR
 from finstrategy.reporting import charts, model_store
+from finstrategy.reporting import panel
 from finstrategy.reporting.panel import build_panel_dataframe, build_plain_language_summary
 from finstrategy.reporting.pdf_report import generate_pdf_report
 from finstrategy.rl.entry_dqn import evaluate_entry_timing
@@ -287,6 +288,13 @@ def render_pipeline_results(tickers: list[str], results: dict, not_eligible: dic
                     except Exception as unexpected:
                         st.warning(f"Análise de risco indisponível: {unexpected}")
                     try:
+                        st.markdown(f"**{panel.build_strike_menu_header(ticker, result)}**")
+                        st.dataframe(panel.build_strike_menu_table(result), width="stretch")
+                        if not result["recommended_respects_limit"]:
+                            st.caption(
+                                f"Nenhuma strike deixa a perda máxima abaixo de {settings.max_acceptable_loss_pct:.0%}; "
+                                "a recomendada é a de menor perda máxima."
+                            )
                         st.pyplot(charts.plot_strike_menu(ticker, result, settings.max_acceptable_loss_pct), clear_figure=True)
                         st.caption(
                             "Cada ponto é uma strike real disponível no Yahoo. Mais à direita = proteção mais cara; "
@@ -301,11 +309,13 @@ def render_pipeline_results(tickers: list[str], results: dict, not_eligible: dic
                         st.warning(f"Gráfico de proteção indisponível: {unexpected}")
                 if evaluation is not None:
                     try:
+                        st.dataframe(panel.build_entry_evaluation_table(evaluation), width="stretch")
                         st.pyplot(charts.plot_entry_evaluation(ticker, evaluation), clear_figure=True)
                         st.caption(
                             "Economia média de cada estratégia de entrada, testada num pedaço dos dados que o modelo nunca viu. "
                             "Se a barra laranja (DQN) não estiver claramente à direita das outras, trate o sinal com cautela."
                         )
+                        st.markdown(panel.build_entry_evaluation_verdict(evaluation))
                     except Exception as unexpected:
                         st.warning(f"Gráfico da DQN indisponível: {unexpected}")
     return summaries
@@ -376,9 +386,17 @@ def render_model_card(ticker: str, model_type: str, evaluation: dict, hyperparam
         )
 
 
-def generate_and_offer_pdf(summaries: list, key_suffix: str = "") -> None:
-    pdf_path = csv_store.reports_csv_path(DEFAULT_DATA_STORE_ROOT, pd.Timestamp.today()).with_suffix(".pdf")
-    generate_pdf_report(summaries, pdf_path)
+def generate_and_offer_pdf(summaries: list, results: dict | None = None, entry_evaluations: dict | None = None, key_suffix: str = "") -> None:
+    generated_at = pd.Timestamp.now()
+    pdf_path = csv_store.report_pdf_path(DEFAULT_DATA_STORE_ROOT, generated_at)
+    try:
+        generate_pdf_report(
+            summaries, pdf_path, report_date=generated_at,
+            results=results or {}, entry_evaluations=entry_evaluations or {},
+        )
+    except Exception as unexpected:
+        st.error(f"Não consegui gerar o PDF: {unexpected}")
+        return
     with open(pdf_path, "rb") as handle:
         st.download_button(
             "Baixar relatório em PDF", handle.read(), file_name=pdf_path.name, mime="application/pdf",
@@ -646,7 +664,7 @@ elif PAGE == "Histórico & Relatórios":
         report_settings = load_settings()
         results, not_eligible, entry_evaluations, risk_free_rate = run_full_pipeline(report_tickers, report_settings)
         summaries = render_pipeline_results(report_tickers, results, not_eligible, entry_evaluations, report_settings, risk_free_rate)
-        generate_and_offer_pdf(summaries, key_suffix="historico")
+        generate_and_offer_pdf(summaries, results=results, entry_evaluations=entry_evaluations, key_suffix="historico")
 
     st.subheader("Relatórios já gerados")
     reports_dir = DEFAULT_DATA_STORE_ROOT / "reports"
