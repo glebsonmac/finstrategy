@@ -1,29 +1,47 @@
 {
-  "started_at": "2026-10-14T08:41:43",
+  "started_at": "2026-10-14T11:00:42",
   "iterations": 1,
   "last_error": null,
-  "updated_at": "2026-10-14T08:41:55",
-  "last_check_at": "2026-10-14T08:41:43",
-  "market_open": false,
-  "last_collection_at": "2026-10-13T14:44:09",
-  "last_model_run_at": null,
+  "updated_at": "2026-10-14T11:01:11",
+  "last_check_at": "2026-10-14T11:01:11",
+  "market_open": true,
+  "last_collection_at": "2026-10-14T11:01:11",
+  "last_model_run_at": "2026-10-14T11:01:11",
   "last_cycle_tickers": [
     {
+      "ticker": "XOM",
+      "collected_at": "2026-10-14T11:00:43",
+      "price": 175.22999572753906,
+      "status": "ok"
+    },
+    {
       "ticker": "DUK",
-      "collected_at": "2026-10-13T14:44:08",
-      "price": 117.86499786376953,
+      "collected_at": "2026-10-14T11:00:47",
+      "price": 117.87999725341797,
       "status": "ok"
     },
     {
-      "ticker": "TAEE11.SA",
-      "collected_at": "2026-10-13T14:44:09",
-      "price": 46.060001373291016,
+      "ticker": "AEP",
+      "collected_at": "2026-10-14T11:00:51",
+      "price": 125.69999694824219,
       "status": "ok"
     },
     {
-      "ticker": "SPY",
-      "collected_at": "2026-10-13T14:44:09",
-      "price": 777.5,
+      "ticker": "D",
+      "collected_at": "2026-10-14T11:00:56",
+      "price": 62.04499816894531,
+      "status": "ok"
+    },
+    {
+      "ticker": "ETR",
+      "collected_at": "2026-10-14T11:01:01",
+      "price": 104.18000030517578,
+      "status": "ok"
+    },
+    {
+      "ticker": "XEL",
+      "collected_at": "2026-10-14T11:01:06",
+      "price": 74.37000274658203,
       "status": "ok"
     }
   ],

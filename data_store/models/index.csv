@@ -1,3 +1,8 @@
 ticker,model_type,trained_at,filename,metrica_principal,valor_principal,bateu_benchmark,sinal_hoje
 DUK,exit,2026-10-13T20:02:02,DUK_exit_20261013T200202.pkl,valor médio realizado,1.7261684218838411,True,
 TAEE11.SA,entry,2026-10-13T20:05:14,TAEE11.SA_entry_20261013T200514.pkl,economia média (%),0.3549501970818273,True,esperar
+XOM,entry,2026-10-14T11:01:57,XOM_entry_20261014T110157.pkl,economia média (%),-1.1336278368560608,False,esperar
+DUK,entry,2026-10-14T11:02:25,DUK_entry_20261014T110225.pkl,economia média (%),-0.23950356156106242,False,esperar
+D,entry,2026-10-14T11:02:32,D_entry_20261014T110232.pkl,economia média (%),-0.2143660260888124,False,esperar
+ETR,entry,2026-10-14T11:02:38,ETR_entry_20261014T110238.pkl,economia média (%),-0.6135002960080661,False,esperar
+XEL,entry,2026-10-14T11:02:50,XEL_entry_20261014T110250.pkl,economia média (%),-0.28323822879862204,False,esperar
