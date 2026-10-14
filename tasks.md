@@ -567,3 +567,35 @@ usando "►", que renderiza bem no navegador).
 composição de dados já testados em `test_protective_put.py`/`test_entry_dqn.py`/
 `test_csv_store.py`; cobertura ficou por validação manual do PDF gerado, incluindo o
 caso adversarial de caracteres XML-inseguros).
+
+**2026-10-14 (sessão 8, continuação) — tickers dos dois notebooks trocados pro setor
+elétrico dos EUA**
+
+Pedido do usuário: os tickers dos dois notebooks (não do app/watchlist) deviam ser do
+setor elétrico dos EUA.
+
+- `notebooks/put_de_protecao_DQN_montecarlos.ipynb` (`AnalysisSettings.tickers`, lista
+  de 10): trocado de `("AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "JPM", "XOM",
+  "KO", "SPY")` para `("NEE", "DUK", "AEP", "D", "ETR", "XEL", "EXC", "ED", "PEG",
+  "EIX")` — NextEra Energy, Duke Energy, American Electric Power, Dominion Energy,
+  Entergy, Xcel Energy, Exelon, Consolidated Edison, Public Service Enterprise Group,
+  Edison International. Exemplo ilustrativo na célula de configuração (seção 1)
+  também trocado de `("AAPL", "KO")` para `("DUK", "NEE")`.
+- `notebooks/black_scholes_dqn_guia.ipynb` (`GuideSettings.ticker`, único): trocado de
+  `"AAPL"` para `"DUK"` (Duke Energy — o ativo mais testado ao longo do projeto, com
+  cadeia de opções líquida confirmada em várias sessões anteriores).
+
+Validação (não só escolha por nome): rodei `strategy.protective_put.analyze_ticker`
+de `src/` — que replica a lógica do notebook sem mudar comportamento — contra o Yahoo
+real, com os mesmos critérios do notebook (vencimento alvo 45 dias, strike 80–102% do
+preço, open interest mínimo 100). Os 10 escolhidos resolveram e tiveram pelo menos 1
+put líquida na faixa (de 1 a 5 strikes cada). Dois candidatos de setor/porte parecidos
+que eu tinha escolhido antes **não passaram** nessa validação e foram trocados:
+Southern Company (SO) e PG&E (PCG) resolvem no Yahoo mas não tinham puts líquidas
+nessa faixa nesta data (2026-10-14) — substituídos por Public Service Enterprise
+Group (PEG) e Edison International (EIX), que passaram. Isso reforça o padrão já
+visto no setor elétrico da B3 (ver Fase 1): nem todo ticker do setor certo tem
+derivativo líquido no Yahoo na data em que se testa — reavaliar periodicamente.
+
+Nenhum teste automatizado afetado (mudança é só nos notebooks, não em `src/`); 150
+testes seguem passando.
