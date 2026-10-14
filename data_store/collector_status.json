@@ -1,47 +1,47 @@
 {
   "started_at": "2026-10-14T11:00:42",
-  "iterations": 1,
+  "iterations": 2,
   "last_error": null,
-  "updated_at": "2026-10-14T11:01:11",
-  "last_check_at": "2026-10-14T11:01:11",
+  "updated_at": "2026-10-14T11:16:14",
+  "last_check_at": "2026-10-14T11:16:14",
   "market_open": true,
-  "last_collection_at": "2026-10-14T11:01:11",
-  "last_model_run_at": "2026-10-14T11:01:11",
+  "last_collection_at": "2026-10-14T11:16:14",
+  "last_model_run_at": null,
   "last_cycle_tickers": [
     {
       "ticker": "XOM",
-      "collected_at": "2026-10-14T11:00:43",
-      "price": 175.22999572753906,
+      "collected_at": "2026-10-14T11:16:12",
+      "price": 175.4600067138672,
       "status": "ok"
     },
     {
       "ticker": "DUK",
-      "collected_at": "2026-10-14T11:00:47",
-      "price": 117.87999725341797,
+      "collected_at": "2026-10-14T11:16:12",
+      "price": 117.80999755859375,
       "status": "ok"
     },
     {
       "ticker": "AEP",
-      "collected_at": "2026-10-14T11:00:51",
-      "price": 125.69999694824219,
+      "collected_at": "2026-10-14T11:16:13",
+      "price": 125.5999984741211,
       "status": "ok"
     },
     {
       "ticker": "D",
-      "collected_at": "2026-10-14T11:00:56",
-      "price": 62.04499816894531,
+      "collected_at": "2026-10-14T11:16:13",
+      "price": 62.05500030517578,
       "status": "ok"
     },
     {
       "ticker": "ETR",
-      "collected_at": "2026-10-14T11:01:01",
-      "price": 104.18000030517578,
+      "collected_at": "2026-10-14T11:16:14",
+      "price": 104.25,
       "status": "ok"
     },
     {
       "ticker": "XEL",
-      "collected_at": "2026-10-14T11:01:06",
-      "price": 74.37000274658203,
+      "collected_at": "2026-10-14T11:16:14",
+      "price": 74.4000015258789,
       "status": "ok"
     }
   ],
