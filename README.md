@@ -166,6 +166,40 @@ num console Python para conferir se os campos `option_right`/`option_strike`/
 — ver a docstring de `src/finstrategy/data/mt5_provider.py` para detalhes e limitações
 (sem fundamentalista, sem taxa livre de risco padrão).
 
+### 5c. Histórico de ações + opções pela COTAHIST da B3
+
+Quando o Yahoo não cobre o papel/opção (caso de vários nomes da B3 — ver a nota em
+`config/tickers_setor_eletrico.yaml`) e o MT5 só mostra as opções que existem *agora*
+(contrato vencido some do servidor), a saída é a **COTAHIST**: a série histórica oficial
+da B3, um arquivo público e gratuito com **todos** os instrumentos negociados no ano —
+ações, calls (070) e puts (080), inclusive séries já vencidas.
+
+Roda em qualquer sistema (macOS/Linux/Windows), **sem** Yahoo e **sem** terminal MT5 —
+é só download de arquivo. Baixa **um `.ZIP` por ano** e cacheia em
+`data_store/cotahist/`, então o download acontece uma vez só por ano.
+
+```bash
+# anos 2023 a 2025, raízes padrão do setor energia (Taesa, CPFL, Engie, Cemig, Copel,
+# Eletrobras, Energisa, Eneva, Equatorial, Neoenergia, Auren, CTEEP, Petrobras, PRIO)
+python scripts/collect_cotahist.py --years 2023-2025
+
+# anos avulsos e raízes customizadas (a raiz casa a ação E toda a cadeia de opções)
+python scripts/collect_cotahist.py --years 2024,2025 --roots PETR,ELET,EGIE
+```
+
+Gera, em `data_store/cotahist/` (ou `--output-dir`), um CSV consolidado mais um por
+classe (`energia_acao_*.csv`, `energia_call_*.csv`, `energia_put_*.csv`), com
+OHLC/volume por pregão e, nas opções, `preexe` (strike) e `datven` (vencimento) na
+mesma linha.
+
+> **Nota sobre "randomizar IP/MAC para não ser derrubado pela B3":** não é feito, de
+> propósito, porque é desnecessário. A COTAHIST é um arquivo estático cujo uso
+> pretendido é ser baixado; com o cache em disco são pouquíssimas requisições na vida
+> do projeto, não há rate-limit a contornar. (Randomizar MAC também não teria efeito:
+> o endereço MAC não trafega além da rede local, o servidor da B3 nunca o vê.) O módulo
+> usa um User-Agent honesto e timeout, como qualquer cliente HTTP bem-comportado — ver
+> a docstring de `src/finstrategy/data/cotahist_provider.py`.
+
 ### 6. Rodar os testes
 
 ```bash
@@ -218,6 +252,7 @@ pytest
 | `errors.py` | `MarketDataError` — o erro usado em todo o sistema para "esse dado não existe/não está disponível agora" (ex.: ação sem opção). Não é um bug, é um estado esperado. |
 | `yahoo_provider.py` | Implementação do `MarketDataProvider` via `yfinance`: histórico de preço, preço atual, dividendo, taxa livre de risco (`^IRX`), cadeia de puts/calls. Extraído do notebook original, sem mudar o comportamento. |
 | `mt5_provider.py` | Implementação do `MarketDataProvider` via o pacote `MetaTrader5` (Windows + terminal/simulador aberto; `pip install -e ".[mt5]"`). Preço e cadeia de opções vêm do MT5; fundamentalista continua vindo do Yahoo (o MT5 não tem). Limitações e como conectar: ver docstring do arquivo. |
+| `cotahist_provider.py` | Leitor da **COTAHIST** da B3 — série histórica oficial (arquivo público anual) com OHLC/volume de **todas** as ações e opções (calls 070, puts 080) negociadas no ano, inclusive séries já vencidas. Resolve o que Yahoo (sem opções B3) e MT5 (só séries vigentes) não cobrem. Baixa 1 `.ZIP`/ano e cacheia em `data_store/cotahist/`. `load_setor(roots, years)` filtra o setor e marca `classe` (ação/call/put). Usado por `scripts/collect_cotahist.py`. |
 | `symbol_search.py` | Busca/valida ticker **ao vivo** no Yahoo: `search_symbols` (autocomplete por nome/código) e `validate_symbol`/`validate_symbols` (confirma que um ticker existe e tem preço antes de entrar na watchlist). |
 | `local_stock_list.py` | Mesma ideia, mas **sem rede**: filtra `config/us_stock_list.csv` (S&P 500) em memória — instantâneo, usado na aba "Lista" do frontend. |
 | `fundamentals_provider.py` | Indicadores fundamentalistas normalizados (P/L, ROE, dívida/patrimônio, dividend yield, etc.) a partir do `yfinance`. Cuidado documentado aqui: `dividendYield` do Yahoo vem em escala diferente dos outros campos de percentual — já normalizado. |
@@ -292,6 +327,7 @@ limites de risco, parâmetros do Monte Carlo e das DQNs). `load_settings`/
 |---|---|
 | `collect_overnight.py` | Wrapper de linha de comando para `collector/overnight.py` — a coleta noturna (ver seção 5 acima). |
 | `collect_mt5_daily.py` | Wrapper de linha de comando para `collector/mt5_daily_log.py` — a coleta diária via MT5 (ver seção 5b acima). |
+| `collect_cotahist.py` | Baixa a COTAHIST da B3 e extrai ações + opções do setor energia para CSV (ver seção 5c acima). Usa `data/cotahist_provider.py`. |
 | `rank_us_megacaps.py` | Reavalia o top-20 EUA ao vivo no Yahoo; usado para gerar/atualizar `config/us_top20_megacaps.yaml`. |
 
 ### `tests/`

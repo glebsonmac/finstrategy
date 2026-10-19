@@ -225,6 +225,7 @@ data_store/fundamentals/*
 data_store/model_runs/*
 data_store/reports/*
 data_store/overnight/*
+data_store/cotahist/*
 data_store/collector_status.json
 !data_store/**/.gitkeep
 config/watchlist.yaml
