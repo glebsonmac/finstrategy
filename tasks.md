@@ -668,3 +668,34 @@ símbolo de opção de verdade do corretor escolhido pra confirmar que `option_r
 `"*{ticker}*"`. Fica registrado como item de validação pendente, não como
 "funcionalidade incompleta" — a lógica em volta da API está testada, a API em si não
 pôde ser exercitada de verdade aqui.
+
+**2026-10-19 (sessão 9, continuação) — backfill de N anos no coletor MT5**
+
+Pedido do usuário: poder escolher quantos anos para trás buscar (em vez de só o
+fechamento mais recente a cada rodada), e perguntou se o coletor MT5 já estava
+plugado no Streamlit (resposta: não — é só CLI, mesmo formato de `overnight.py`; não
+implementado ainda, fica pra decisão futura do usuário).
+
+- [x] `collector/mt5_daily_log.py`: `collect_stock_history_rows(ticker, provider,
+      years_back)` novo — busca `download_price_history` com `start_date` calculado
+      a partir de `years_back` e grava **uma linha por dia** do período (não só a
+      mais recente). Fundamentalista (Yahoo) só é anexado na última linha — decisão
+      deliberada: não existe fundamentalista histórico diário nessa pipeline (P/L,
+      ROE etc. são um retrato de hoje), repetir o valor de hoje em todas as linhas
+      do passado seria enganoso, então as linhas antigas ficam com essas colunas em
+      branco. Opções (que não têm cadeia histórica no MT5) continuam sendo coletadas
+      só pra linha mais recente, igual ao caminho normal.
+- [x] `run_daily_collection` ganhou o parâmetro opcional `years_back` — quando
+      definido, usa `collect_stock_history_rows` em vez de `collect_stock_row` por
+      ticker; continua passando pelo mesmo append + `sort_csv_by` de sempre, então o
+      backfill entra no log já ordenado, e rodadas diárias normais depois do backfill
+      só vão completando o log pra frente.
+- [x] CLI: `--years-back` novo em `scripts/collect_mt5_daily.py`/`main()` (ex.
+      `--years-back 2`); README atualizado com o exemplo e a observação de que isso
+      também funciona fora do horário de pregão (o MT5 serve histórico em cache do
+      terminal, não depende do mercado estar aberto no momento da coleta).
+- [x] 5 testes novos em `tests/test_mt5_daily_log.py` (via `FakeProvider`,
+      cobrindo: uma linha por dia, fundamentalista só na última linha, falha de
+      preço sem lançar, fundamentalista indisponível sem derrubar a linha, e
+      `run_daily_collection(..., years_back=...)` ponta a ponta). 188 testes no
+      total (eram 183).

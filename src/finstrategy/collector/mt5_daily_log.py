@@ -15,6 +15,12 @@ Depois de cada rodada, os dois CSVs são reordenados por `date` (crescente) via
 `csv_store.sort_csv_by` — ficam sempre legíveis mesmo se a coleta rodar fora de ordem
 em dias diferentes. É puro "append" (sem deduplicar): rodar duas vezes no mesmo dia
 grava duas linhas para aquele dia — rode no máximo uma vez por dia por ticker.
+
+Por padrão, cada rodada grava só o fechamento **mais recente** (o uso diário normal).
+Para popular o log de uma vez com vários anos de histórico (`run_daily_collection(...,
+years_back=2)` ou `--years-back 2` na CLI), use `collect_stock_history_rows` — o MT5
+guarda histórico de preço em cache no terminal, então isso não depende do mercado
+estar aberto nem de rodar dia após dia.
 """
 from __future__ import annotations
 
@@ -91,6 +97,52 @@ def collect_stock_row(ticker: str, provider, lookback_days: int = 7) -> dict:
     return row
 
 
+def collect_stock_history_rows(ticker: str, provider, years_back: float) -> list[dict]:
+    """Backfill de preço: uma linha por fechamento diário dos últimos `years_back`
+    anos (ex. `years_back=2` pega ~2 anos de histórico numa rodada só), em vez de
+    esperar o coletor incremental rodar um dia de cada vez. Útil para popular o log
+    de uma vez quando o MT5/corretor tem histórico de sobra em cache.
+
+    Fundamentalista (Yahoo) só é anexado na **linha mais recente** — não existe
+    fundamentalista histórico diário nesta pipeline (P/L, ROE etc. são um retrato de
+    hoje, não variam dia a dia); preencher todas as linhas repetiria o mesmo valor e
+    daria a entender, de forma enganosa, que o fundamentalista de anos atrás era
+    igual ao de hoje. Nas linhas antigas, essas colunas ficam em branco.
+
+    Nunca lança — falha no preço vira uma única linha de status (mesmo padrão de
+    `collect_stock_row`)."""
+    collected_at = pd.Timestamp.now().isoformat(timespec="seconds")
+    start = (pd.Timestamp.today() - pd.DateOffset(years=years_back)).strftime("%Y-%m-%d")
+    try:
+        closes = provider.download_price_history(ticker, start_date=start)
+        if closes.empty:
+            raise MarketDataError("sem histórico de preços no período pedido")
+    except MarketDataError as reason:
+        return [{"date": pd.Timestamp.today().strftime("%Y-%m-%d"), "ticker": ticker,
+                  "status": f"sem preço: {reason}", "collected_at": collected_at}]
+    except Exception as unexpected:
+        return [{"date": pd.Timestamp.today().strftime("%Y-%m-%d"), "ticker": ticker,
+                  "status": f"erro inesperado no preço: {unexpected}", "collected_at": collected_at}]
+
+    rows = [
+        {"date": pd.Timestamp(date).strftime("%Y-%m-%d"), "ticker": ticker, "close": float(close),
+         "status": "ok", "collected_at": collected_at}
+        for date, close in closes.items()
+    ]
+    try:
+        snapshot = fundamentals_provider.get_fundamental_snapshot(ticker)
+        rows[-1].update({
+            "sector": snapshot.sector, "industry": snapshot.industry, "pe_ratio": snapshot.pe_ratio,
+            "forward_pe": snapshot.forward_pe, "price_to_book": snapshot.price_to_book, "roe": snapshot.roe,
+            "debt_to_equity": snapshot.debt_to_equity, "dividend_yield_ttm": snapshot.dividend_yield_ttm,
+            "revenue_growth_yoy": snapshot.revenue_growth_yoy, "free_cash_flow": snapshot.free_cash_flow,
+            "market_cap": snapshot.market_cap, "profit_margin": snapshot.profit_margin,
+        })
+    except Exception as unexpected:
+        rows[-1]["status"] = f"ok (sem fundamentalista: {unexpected})"
+    return rows
+
+
 def collect_option_rows(ticker: str, provider, underlying_price: float, date_str: str) -> list[dict]:
     """Uma linha por call/put líquida do vencimento mais próximo disponível no MT5
     para esse ticker. Nunca lança — ticker sem opções no MT5 só vira lista vazia
@@ -131,18 +183,31 @@ def collect_option_rows(ticker: str, provider, underlying_price: float, date_str
     return rows
 
 
-def run_daily_collection(tickers: list[str], provider, data_store_root: Path | str = DEFAULT_DATA_STORE_ROOT, log=print) -> tuple[Path, Path]:
+def run_daily_collection(
+    tickers: list[str], provider, data_store_root: Path | str = DEFAULT_DATA_STORE_ROOT,
+    log=print, years_back: float | None = None,
+) -> tuple[Path, Path]:
     """Coleta todos os tickers e **anexa** (nunca sobrescreve) nos dois CSVs de log;
-    reordena os dois por data ao final. Devolve os caminhos dos dois CSVs."""
+    reordena os dois por data ao final. Devolve os caminhos dos dois CSVs.
+
+    Por padrão (`years_back=None`) grava só o fechamento mais recente de cada
+    ticker — o uso do dia a dia. Com `years_back` definido (ex. `2.0`), faz um
+    backfill de preço dos últimos N anos numa rodada só (ver
+    `collect_stock_history_rows`); as opções continuam sendo só a cadeia atual
+    (não existe cadeia de opções histórica no MT5 — vira a última linha de preço).
+    """
     stock_rows, option_rows = [], []
     for index, ticker in enumerate(tickers, start=1):
         log(f"[{index}/{len(tickers)}] {ticker}...")
-        stock_row = collect_stock_row(ticker, provider)
-        stock_rows.append(stock_row)
-        if stock_row["status"].startswith("ok"):
-            option_rows.extend(collect_option_rows(ticker, provider, stock_row["close"], stock_row["date"]))
+        ticker_rows = collect_stock_history_rows(ticker, provider, years_back) if years_back else [collect_stock_row(ticker, provider)]
+        stock_rows.extend(ticker_rows)
+        latest_row = ticker_rows[-1]
+        if years_back:
+            log(f"  -> {len(ticker_rows)} dia(s) de histórico")
+        if latest_row["status"].startswith("ok"):
+            option_rows.extend(collect_option_rows(ticker, provider, latest_row["close"], latest_row["date"]))
         else:
-            log(f"  -> sem preço: {stock_row['status']}")
+            log(f"  -> sem preço: {latest_row['status']}")
 
     stocks_path = stock_log_path(data_store_root)
     options_path = option_log_path(data_store_root)
@@ -172,6 +237,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--password", type=str, default=None, help="Senha da conta MT5 (opcional).")
     parser.add_argument("--server", type=str, default=None, help="Servidor da corretora no MT5 (opcional).")
     parser.add_argument("--risk-free-symbol", type=str, default=None, help="Símbolo MT5 usado como taxa livre de risco (opcional).")
+    parser.add_argument(
+        "--years-back", type=float, default=None,
+        help="Backfill: busca N anos de histórico de preço numa rodada só (ex. 2 = últimos 2 anos), "
+             "em vez de só o fechamento mais recente. Use uma vez para popular o log; nas rodadas "
+             "diárias seguintes, omita essa opção.",
+    )
     args = parser.parse_args(argv)
 
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()]
@@ -182,8 +253,9 @@ def main(argv: list[str] | None = None) -> int:
     from ..data.mt5_provider import MT5Provider
 
     with MT5Provider(login=args.login, password=args.password, server=args.server, risk_free_symbol=args.risk_free_symbol) as provider:
-        print(f"Coletando {len(tickers)} ticker(s) via MT5: {', '.join(tickers)}")
-        run_daily_collection(tickers, provider, data_store_root=Path(args.output_dir))
+        print(f"Coletando {len(tickers)} ticker(s) via MT5: {', '.join(tickers)}"
+              + (f" (backfill de {args.years_back} ano(s))" if args.years_back else ""))
+        run_daily_collection(tickers, provider, data_store_root=Path(args.output_dir), years_back=args.years_back)
     return 0
 
 

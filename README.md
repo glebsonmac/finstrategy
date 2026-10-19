@@ -89,23 +89,49 @@ Exemplo de agendamento com `cron` (roda todo dia às 23h, horário local):
 Pensado para quando a fonte de preço/opções é um terminal MetaTrader5 (simulador ou
 conta demo) em vez do Yahoo — por exemplo, para repetir a coleta por vários dias
 seguidos até acumular histórico suficiente para o GARCH Monte Carlo e o Black-Scholes.
-Só funciona em **Python nativo do Windows**, com o terminal MT5 **aberto e logado**.
+Só funciona em **Python nativo do Windows**, com o terminal MT5 **aberto e logado**
+(é o pacote `MetaTrader5` que exige isso, não o resto do projeto).
 
-```bash
-# instala a dependência opcional (só no Windows)
-pip install -e ".[mt5]"
+**Instalar no Windows** (passos 1–2 da seção "Como rodar" acima são para
+macOS/Linux — no Windows, o `venv` ativa diferente):
 
-# com o terminal MT5 já aberto e logado no simulador/demo
-python scripts/collect_mt5_daily.py --tickers AAPL,DUK,NEE
+```powershell
+cd caminho\do\projeto\finstrategy
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev,mt5]"
 ```
+
+**Rodar a coleta** (com o terminal MT5 aberto e logado no simulador/demo):
+
+```powershell
+python scripts\collect_mt5_daily.py --tickers AAPL,DUK,NEE
+
+# dá pra rodar fora do horário de pregão (ex. à noite) — o MT5 serve o último
+# fechamento/cotação em cache, não precisa do mercado aberto no momento da coleta
+
+# backfill: popula o log de uma vez com 2 anos de histórico de preço (em vez de só
+# o fechamento mais recente), uma linha por dia; use uma vez e depois volte a rodar
+# sem --years-back pra ir só adicionando o dia mais recente
+python scripts\collect_mt5_daily.py --tickers AAPL,DUK,NEE --years-back 2
+```
+
+**Agendar (Agendador de Tarefas do Windows, em vez de `cron`)**: crie uma tarefa que
+rode diariamente, com "Programa/script" apontando para
+`caminho\do\projeto\finstrategy\.venv\Scripts\python.exe` e "Argumentos" para
+`scripts\collect_mt5_daily.py --tickers AAPL,DUK,NEE` — o terminal MT5 precisa estar
+aberto e logado na hora em que a tarefa rodar.
 
 Cada rodada **anexa** (nunca sobrescreve) uma linha por ticker em dois CSVs de log —
 sempre o fechamento do dia, nunca um preço intradiário:
 
 - `data_store/mt5/acoes_diario.csv`: ticker + fechamento (MT5) + indicadores
-  fundamentalistas (Yahoo — o MT5 não tem fundamentalista).
+  fundamentalistas (Yahoo — o MT5 não tem fundamentalista). No backfill
+  (`--years-back`), o fundamentalista só é anexado na linha mais recente — não existe
+  fundamentalista histórico diário (seria repetir o retrato de hoje em todo o passado).
 - `data_store/mt5/opcoes_diario.csv`: cada call/put líquida do vencimento mais
-  próximo, com prêmio/strike/vencimento/preço do ativo-objeto na mesma linha.
+  próximo, com prêmio/strike/vencimento/preço do ativo-objeto na mesma linha. Sempre a
+  cadeia **atual** — não existe cadeia de opções histórica no MT5/backfill.
 
 Depois de cada rodada, os dois CSVs são reordenados por data (crescente) — dá para
 rodar fora de ordem em dias diferentes que o resultado continua legível. Não
@@ -249,7 +275,7 @@ limites de risco, parâmetros do Monte Carlo e das DQNs). `load_settings`/
 ### `tests/`
 
 Um arquivo de teste por módulo de `src/finstrategy/` (mesma nomenclatura), quase todos
-usando mocks/fakes para não depender de rede nem do mercado estar aberto — 183 testes
+usando mocks/fakes para não depender de rede nem do mercado estar aberto — 188 testes
 no total. Rodar com `pytest`. `test_mt5_provider.py` usa um dublê do pacote
 `MetaTrader5` (não instala fora do Windows) — não substitui testar contra um terminal
 MT5 de verdade, só garante que a lógica em volta dele está correta.

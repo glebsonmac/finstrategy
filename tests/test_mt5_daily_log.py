@@ -73,6 +73,39 @@ def test_collect_stock_row_ok_even_when_fundamentals_fail(monkeypatch):
     assert row["close"] == 118.0
 
 
+# --- collect_stock_history_rows (backfill de N anos) ---
+
+def test_collect_stock_history_rows_returns_one_row_per_day(monkeypatch):
+    monkeypatch.setattr(mt5_daily_log.fundamentals_provider, "get_fundamental_snapshot", lambda t: _fake_snapshot(t))
+    rows = mt5_daily_log.collect_stock_history_rows("DUK", FakeProvider(close=118.0), years_back=2)
+    assert len(rows) == 3  # o FakeProvider sempre devolve 3 dias, independente do start_date pedido
+    assert all(row["status"] == "ok" for row in rows)
+    assert [row["close"] for row in rows] == [117.0, 117.5, 118.0]
+
+
+def test_collect_stock_history_rows_only_attaches_fundamentals_to_latest_row(monkeypatch):
+    monkeypatch.setattr(mt5_daily_log.fundamentals_provider, "get_fundamental_snapshot", lambda t: _fake_snapshot(t))
+    rows = mt5_daily_log.collect_stock_history_rows("DUK", FakeProvider(close=118.0), years_back=1)
+    assert "sector" not in rows[0] or rows[0].get("sector") is None
+    assert rows[-1]["sector"] == "Utilities"
+
+
+def test_collect_stock_history_rows_reports_status_without_raising_when_price_fails():
+    rows = mt5_daily_log.collect_stock_history_rows("NOPE", FakeProvider(raise_price=True), years_back=2)
+    assert len(rows) == 1
+    assert rows[0]["status"].startswith("sem preço")
+
+
+def test_collect_stock_history_rows_ok_even_when_fundamentals_fail(monkeypatch):
+    def fail(ticker):
+        raise RuntimeError("Yahoo fora do ar")
+
+    monkeypatch.setattr(mt5_daily_log.fundamentals_provider, "get_fundamental_snapshot", fail)
+    rows = mt5_daily_log.collect_stock_history_rows("DUK", FakeProvider(close=118.0), years_back=1)
+    assert rows[-1]["status"].startswith("ok (sem fundamentalista")
+    assert rows[0]["status"] == "ok"
+
+
 # --- collect_option_rows ---
 
 def test_collect_option_rows_includes_calls_and_puts():
@@ -106,6 +139,20 @@ def test_run_daily_collection_appends_without_overwriting(tmp_path, monkeypatch)
     options = read_csv(mt5_daily_log.option_log_path(tmp_path))
     assert len(stocks) == 2  # duas rodadas -> duas linhas (append puro, sem deduplicar)
     assert len(options) == 4  # 2 rodadas x (1 call + 1 put)
+
+
+def test_run_daily_collection_with_years_back_appends_history_and_options_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(mt5_daily_log.fundamentals_provider, "get_fundamental_snapshot", lambda t: _fake_snapshot(t))
+    provider = FakeProvider(close=118.0)
+
+    mt5_daily_log.run_daily_collection(["DUK"], provider, data_store_root=tmp_path, log=lambda *_: None, years_back=2)
+
+    stocks = read_csv(mt5_daily_log.stock_log_path(tmp_path))
+    options = read_csv(mt5_daily_log.option_log_path(tmp_path))
+    assert len(stocks) == 3  # backfill: 1 linha por dia devolvido pelo provider
+    assert len(options) == 2  # opções só pra linha mais recente (1 call + 1 put), não por dia histórico
+    assert stocks.iloc[-1]["sector"] == "Utilities"
+    assert pd.isna(stocks.iloc[0]["sector"])
 
 
 def test_run_daily_collection_sorts_by_date_ascending(tmp_path, monkeypatch):
