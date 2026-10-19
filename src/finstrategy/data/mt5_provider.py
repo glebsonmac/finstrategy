@@ -9,7 +9,12 @@ dependência padrão do projeto porque não instala fora do Windows (ver `pyproj
 logado (`mt5.initialize()` sem credenciais) — é o jeito mais simples para um
 simulador/demo que você abre manualmente antes de rodar o script. Para login
 automático, passe `login`/`password`/`server`/`terminal_path` no construtor, ou
-defina as variáveis de ambiente `MT5_LOGIN`/`MT5_PASSWORD`/`MT5_SERVER`/`MT5_PATH`.
+defina as variáveis de ambiente `MT5_LOGIN`/`MT5_PASSWORD`/`MT5_SERVER`/`MT5_PATH` —
+inclusive num arquivo `.env` na raiz do projeto (copie `.env.example`, já gitignorado,
+nunca vai pro git). `MT5Provider` carrega esse `.env` sozinho ao instanciar, via
+`python-dotenv` (instalado junto com `pip install -e ".[mt5]"`) — se o pacote não
+estiver instalado, simplesmente ignora o `.env` e segue só com variáveis de ambiente
+reais, sem quebrar. Ver "Coleta diária via MT5" no README.md para o passo a passo.
 
 **O que NÃO dá para confiar igual ao Yahoo** (ao contrário de `yahoo_provider.py`,
 que foi testado ponta a ponta com dados reais, isto aqui não pôde ser testado contra
@@ -37,6 +42,19 @@ import os
 import pandas as pd
 
 from .errors import MarketDataError
+
+
+def _load_dotenv_if_available() -> None:
+    """Carrega um `.env` da raiz do projeto (ou de um diretório pai), se existir e se
+    `python-dotenv` estiver instalado. Nunca sobrescreve uma variável de ambiente que
+    já esteja definida de verdade — o `.env` é só um valor padrão de conveniência.
+    Silenciosamente não faz nada se `python-dotenv` não estiver instalado (ele só
+    entra no grupo opcional `mt5` do `pyproject.toml`)."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv()
 
 
 class MT5Provider:
@@ -68,6 +86,7 @@ class MT5Provider:
                 ) from exc
         self._mt5 = mt5_module
 
+        _load_dotenv_if_available()
         login = login if login is not None else os.environ.get("MT5_LOGIN")
         password = password or os.environ.get("MT5_PASSWORD")
         server = server or os.environ.get("MT5_SERVER")

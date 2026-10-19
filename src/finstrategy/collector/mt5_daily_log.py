@@ -143,17 +143,21 @@ def collect_stock_history_rows(ticker: str, provider, years_back: float) -> list
     return rows
 
 
-def collect_option_rows(ticker: str, provider, underlying_price: float, date_str: str) -> list[dict]:
+def collect_option_rows(ticker: str, provider, underlying_price: float, date_str: str, log=print) -> list[dict]:
     """Uma linha por call/put líquida do vencimento mais próximo disponível no MT5
     para esse ticker. Nunca lança — ticker sem opções no MT5 só vira lista vazia
     (mesma decisão já tomada para o Yahoo em `strategy/protective_put.py`: "não
-    elegível" não é um bug)."""
+    elegível" não é um bug) — mas o motivo vai pro `log`, porque "lista vazia" sozinho
+    não diz se é porque o corretor não tem opções desse ativo ou porque o padrão de
+    símbolo (`option_group_pattern`) não bate com o nome usado pelo seu corretor."""
     collected_at = pd.Timestamp.now().isoformat(timespec="seconds")
     try:
         expirations = provider.list_option_expirations(ticker)
-    except MarketDataError:
+    except MarketDataError as reason:
+        log(f"  -> sem opções de {ticker} no MT5: {reason}")
         return []
     if not expirations:
+        log(f"  -> sem opções de {ticker} no MT5: nenhum vencimento disponível")
         return []
     expiration = min(expirations)  # vencimento mais próximo disponível no MT5
 
@@ -161,7 +165,8 @@ def collect_option_rows(ticker: str, provider, underlying_price: float, date_str
     for option_type, downloader in (("CALL", provider.download_call_chain), ("PUT", provider.download_put_chain)):
         try:
             chain = downloader(ticker, expiration)
-        except MarketDataError:
+        except MarketDataError as reason:
+            log(f"  -> sem {option_type.lower()}s de {ticker} no MT5: {reason}")
             continue
         for _, contract in chain.iterrows():
             bid, ask = float(contract.get("bid", 0) or 0), float(contract.get("ask", 0) or 0)
@@ -205,7 +210,7 @@ def run_daily_collection(
         if years_back:
             log(f"  -> {len(ticker_rows)} dia(s) de histórico")
         if latest_row["status"].startswith("ok"):
-            option_rows.extend(collect_option_rows(ticker, provider, latest_row["close"], latest_row["date"]))
+            option_rows.extend(collect_option_rows(ticker, provider, latest_row["close"], latest_row["date"], log=log))
         else:
             log(f"  -> sem preço: {latest_row['status']}")
 
@@ -220,7 +225,17 @@ def run_daily_collection(
     ok_count = sum(1 for row in stock_rows if row["status"].startswith("ok"))
     log(f"{ok_count}/{len(stock_rows)} ações coletadas, {len(option_rows)} linhas de opção.")
     log(f"Log de ações (append): {stocks_path}")
-    log(f"Log de opções (append): {options_path}")
+    if option_rows:
+        log(f"Log de opções (append): {options_path}")
+    else:
+        log(
+            "Nenhuma opção coletada (ver motivo nas linhas '-> sem opções/calls/puts' acima). "
+            "Se o seu corretor realmente tem opções desse ativo no MT5, confira o nome de um "
+            "símbolo real no Market Watch do terminal e rode "
+            "MT5Provider(...).inspect_symbol('NOME_DO_SIMBOLO') pra ver se option_right/"
+            "option_strike/expiration_time vêm preenchidos — e ajuste option_group_pattern "
+            "se o nome não bater com '*{ticker}*'."
+        )
     return stocks_path, options_path
 
 

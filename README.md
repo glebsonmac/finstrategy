@@ -102,6 +102,28 @@ python -m venv .venv
 pip install -e ".[dev,mt5]"
 ```
 
+**Login automático (opcional, via `.env`)**: se o terminal MT5 já está aberto e logado
+na conta/simulador certo, pule esta parte — não precisa de nada disso. Se quiser que o
+script faça login sozinho (ex. numa tarefa agendada, sem abrir o MT5 na mão toda vez):
+
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+Preencha as linhas (sem aspas, sem espaço antes/depois do `=`):
+
+```
+MT5_LOGIN=12345678
+MT5_PASSWORD=sua_senha_aqui
+MT5_SERVER=NomeDaCorretora-Demo
+```
+
+Salve e feche. O `.env` já está no `.gitignore` — nunca vai pro git, fica só na sua
+máquina. `MT5Provider()` lê esse arquivo sozinho (via `python-dotenv`, instalado junto
+com `pip install -e ".[mt5]"`) toda vez que o script roda, sem precisar configurar
+variável de ambiente manualmente no Windows.
+
 **Rodar a coleta** (com o terminal MT5 aberto e logado no simulador/demo):
 
 ```powershell

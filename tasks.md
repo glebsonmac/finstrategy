@@ -699,3 +699,67 @@ implementado ainda, fica pra decisão futura do usuário).
       preço sem lançar, fundamentalista indisponível sem derrubar a linha, e
       `run_daily_collection(..., years_back=...)` ponta a ponta). 188 testes no
       total (eram 183).
+
+**2026-10-19 (sessão 9, continuação 2) — login do MT5 via `.env`**
+
+Pedido do usuário: explicar/configurar como colocar a senha do MT5 num `.env`, pra
+não digitar login toda vez no Windows. `MT5Provider` já lia `MT5_LOGIN`/`MT5_PASSWORD`/
+`MT5_SERVER`/`MT5_PATH` de variável de ambiente, mas nada no projeto carregava um
+`.env` de verdade — faltava a ponte.
+
+- [x] `python-dotenv` adicionado ao grupo opcional `mt5` do `pyproject.toml`.
+- [x] `data/mt5_provider.py`: `_load_dotenv_if_available()` novo — chamado no início
+      de `__init__`, carrega um `.env` da raiz do projeto via `python-dotenv` antes de
+      ler as variáveis de ambiente. Degrada graciosamente se `python-dotenv` não
+      estiver instalado (`except ImportError: return`, sem quebrar nada) — não é um
+      hard requirement, só uma conveniência. Nunca sobrescreve uma variável de
+      ambiente real já definida (comportamento padrão do `load_dotenv()`).
+- [x] `.env.example` novo na raiz do projeto (`MT5_LOGIN`/`MT5_PASSWORD`/
+      `MT5_SERVER`/`MT5_PATH`, comentado) — `.env` já estava no `.gitignore` desde o
+      início do projeto, só faltava o exemplo e o código que lê.
+- [x] README.md: passo a passo no Windows (`copy .env.example .env`, editar, o que
+      cada variável significa) dentro da seção "5b. Coleta diária via MT5".
+- [x] 3 testes novos em `tests/test_mt5_provider.py` (`_load_dotenv_if_available`
+      sem o pacote instalado — caso real deste ambiente de dev, já que
+      `python-dotenv` não está instalado aqui —, com o pacote instalado via dublê em
+      `sys.modules`, e que `__init__` chama o carregamento antes de ler `MT5_LOGIN`).
+      191 testes no total (eram 188).
+
+**2026-10-19 (sessão 9, continuação 3) — 1º teste real no Windows: ações vieram, opções não**
+
+**Validação real importante:** usuário rodou `scripts/collect_mt5_daily.py --years-back 2`
+num Windows de verdade, terminal MT5 conectado a um corretor de verdade. `acoes_diario.csv`
+foi gerado certinho (preços capturados). `opcoes_diario.csv` **não foi gerado** — a
+primeira confirmação de que a parte de preço do `MT5Provider` funciona contra uma
+conexão real; a parte de opções ainda não.
+
+**Causa raiz encontrada na revisão (não no comportamento do MT5 em si, no código):**
+`collect_option_rows` capturava `MarketDataError` de `list_option_expirations`/
+`download_call_chain`/`download_put_chain` e devolvia lista vazia **sem logar o
+motivo** — `run_daily_collection` também nunca tinha visibilidade disso. Resultado:
+"sem opções" e "corretor sem opções pra esse ativo" e "padrão de símbolo errado" e
+"campo do MT5 com nome diferente do esperado" todos pareciam a mesma coisa (CSV não
+aparece), sem nenhum jeito de diferenciar qual exatamente aconteceu.
+
+- [x] `collect_option_rows` (mt5_daily_log.py) ganhou parâmetro `log=print` — toda
+      `MarketDataError` capturada (sem vencimento, sem calls, sem puts) agora vira uma
+      linha de log com o motivo original do MT5Provider, em vez de virar lista vazia
+      silenciosa.
+- [x] `run_daily_collection` passa `log` adiante pra `collect_option_rows` e, no
+      resumo final, se `option_rows` ficar vazio, imprime um parágrafo explicando os
+      próximos passos (conferir o nome real do símbolo no Market Watch do MT5, rodar
+      `inspect_symbol(...)`, ajustar `option_group_pattern`) em vez de só silenciar.
+- [x] `.gitignore`: `data_store/mt5/*` esquecido na sessão anterior — corrigido antes
+      que repetisse o mesmo problema dos commits acidentais de `data_store/
+      collector_status.json`/`.pkl` (ver sessão de resolução de conflito, 2026-10-19).
+- [x] 1 teste novo em `tests/test_mt5_daily_log.py` confirmando que o motivo da
+      `MarketDataError` chega no log. 192 testes no total (eram 191).
+
+**O que ainda não dá pra saber sem a mensagem de log real:** se o corretor do
+usuário simplesmente **não oferece opções de ações via MT5** (motivo mais provável —
+a maioria dos corretores MT5 é forex/CFD/índices, cadeia completa de opção de ação
+americana é incomum nessa plataforma) ou se oferece só com um padrão de nome de
+símbolo diferente de `*{ticker}*`. Próximo passo pedido ao usuário: rodar de novo
+(o log agora mostra o motivo exato) e, se o corretor tiver opções desse ativo no
+Market Watch do terminal, me passar o nome de um símbolo real pra eu ajustar
+`option_group_pattern`/os campos lidos em `_option_symbols`.

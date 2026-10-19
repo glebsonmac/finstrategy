@@ -126,6 +126,19 @@ def test_collect_option_rows_empty_when_no_options():
     assert rows == []
 
 
+def test_collect_option_rows_logs_the_reason_when_no_options():
+    # Sem isso, "sem opções" vira uma lista vazia silenciosa — impossível saber se é
+    # porque o corretor não tem opções desse ativo ou se o padrão de símbolo está
+    # errado. Foi exatamente o que faltou pra diagnosticar o caso real (MT5 trouxe
+    # ações mas não opções) — o motivo agora vai pro log.
+    messages = []
+    provider = FakeProvider(with_options=False)
+    mt5_daily_log.collect_option_rows("TAEE11.SA", provider, underlying_price=35.0, date_str="2026-10-19", log=messages.append)
+    assert len(messages) == 1
+    assert "sem opções" in messages[0]
+    assert "sem opções no MT5" in messages[0]  # a MarketDataError original (ver FakeProvider) aparece no log
+
+
 # --- run_daily_collection: append-only + sort by date ---
 
 def test_run_daily_collection_appends_without_overwriting(tmp_path, monkeypatch):

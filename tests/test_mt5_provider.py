@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from finstrategy.data.errors import MarketDataError
-from finstrategy.data.mt5_provider import MT5Provider
+from finstrategy.data.mt5_provider import MT5Provider, _load_dotenv_if_available
 
 FakeSymbol = namedtuple("FakeSymbol", ["name", "option_right", "option_strike", "expiration_time", "session_open_interest"])
 FakeTick = namedtuple("FakeTick", ["bid", "ask", "last", "volume"])
@@ -57,6 +57,40 @@ class FakeMT5:
 
     def copy_rates_range(self, symbol, timeframe, start, end):
         return self.rates.get(symbol)
+
+
+# --- .env (python-dotenv é opcional: não pode quebrar quando não está instalado) ---
+
+def test_load_dotenv_if_available_does_nothing_without_python_dotenv(monkeypatch):
+    monkeypatch.setitem(__import__("sys").modules, "dotenv", None)  # simula pacote ausente
+    _load_dotenv_if_available()  # não deve lançar
+
+
+def test_load_dotenv_if_available_calls_load_dotenv_when_installed(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    fake_dotenv = types.ModuleType("dotenv")
+    fake_dotenv.load_dotenv = lambda *a, **k: calls.append((a, k))
+    monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
+
+    _load_dotenv_if_available()
+    assert len(calls) == 1
+
+
+def test_init_calls_load_dotenv_before_reading_env(monkeypatch):
+    import sys
+    import types
+
+    monkeypatch.delenv("MT5_LOGIN", raising=False)
+    fake_dotenv = types.ModuleType("dotenv")
+    fake_dotenv.load_dotenv = lambda *a, **k: monkeypatch.setenv("MT5_LOGIN", "555")
+    monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
+
+    fake = FakeMT5()
+    MT5Provider(mt5_module=fake)
+    assert fake.initialize_calls == [{"login": 555, "password": None, "server": None}]
 
 
 def test_init_raises_market_data_error_when_initialize_fails():

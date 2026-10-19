@@ -18,8 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 # Só instala em Python nativo do Windows (o pacote não publica wheel para mac/Linux) —
-# ver src/finstrategy/data/mt5_provider.py.
-mt5 = ["MetaTrader5"]
+# ver src/finstrategy/data/mt5_provider.py. python-dotenv carrega o .env com as
+# credenciais do MT5 (MT5_LOGIN/MT5_PASSWORD/MT5_SERVER/MT5_PATH) automaticamente.
+mt5 = ["MetaTrader5", "python-dotenv"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
