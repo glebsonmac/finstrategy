@@ -1,13 +1,14 @@
 """Testa MT5Provider com um dublê do pacote `MetaTrader5` (que só instala no
 Windows) — `mt5_module` é injetável de propósito em `MT5Provider` exatamente para
 isso (ver data/mt5_provider.py)."""
+import fnmatch
 from collections import namedtuple
 
 import pandas as pd
 import pytest
 
 from finstrategy.data.errors import MarketDataError
-from finstrategy.data.mt5_provider import MT5Provider, _load_dotenv_if_available
+from finstrategy.data.mt5_provider import MT5Provider, _b3_root_ticker, _load_dotenv_if_available
 
 FakeSymbol = namedtuple("FakeSymbol", ["name", "option_right", "option_strike", "expiration_time", "session_open_interest"])
 FakeTick = namedtuple("FakeTick", ["bid", "ask", "last", "volume"])
@@ -53,7 +54,12 @@ class FakeMT5:
         return self.ticks.get(symbol)
 
     def symbols_get(self, group=None):
-        return tuple(self.symbols)
+        # Filtra de verdade por glob (igual o MT5 real) — se a fake devolvesse tudo
+        # sempre, ela mascararia o próprio bug de padrão de busca errado que os
+        # testes abaixo existem pra pegar.
+        if group is None:
+            return tuple(self.symbols)
+        return tuple(s for s in self.symbols if fnmatch.fnmatch(s.name, group))
 
     def copy_rates_range(self, symbol, timeframe, start, end):
         return self.rates.get(symbol)
@@ -195,7 +201,48 @@ def test_get_risk_free_rate_with_symbol():
     assert provider.get_risk_free_rate() == pytest.approx(0.0405)
 
 
+# --- _b3_root_ticker ---
+
+@pytest.mark.parametrize("ticker, expected_root", [
+    ("CMIG4.SA", "CMIG"),
+    ("CMIG4", "CMIG"),
+    ("TAEE11.SA", "TAEE"),
+    ("TAEE11", "TAEE"),
+    ("CPFE3.SA", "CPFE"),
+    ("EGIE3.SA", "EGIE"),
+    ("CPLE3.SA", "CPLE"),
+    ("DUK", "DUK"),  # sem dígito final (EUA) -> inalterado
+    ("SPY", "SPY"),
+])
+def test_b3_root_ticker(ticker, expected_root):
+    assert _b3_root_ticker(ticker) == expected_root
+
+
 # --- opções ---
+
+def test_option_search_by_full_ticker_misses_b3_option_code():
+    # Regressão do bug real: buscar pelo ticker completo (CMIG4) nunca bate com o
+    # código de opção da B3 (CMIGO115), porque "CMIG4" não é um pedaço de
+    # "CMIGO115" — falta o "4". É por isso que _option_symbols usa a raiz.
+    assert not fnmatch.fnmatch("CMIGO115", "*CMIG4*")
+    assert fnmatch.fnmatch("CMIGO115", "*CMIG*")
+
+
+def test_list_option_expirations_finds_b3_style_option_by_root_ticker():
+    # CMIGO115 = raiz CMIG + O (venda, março) + 115 (strike) — exemplo real do usuário.
+    expiration_march = int(pd.Timestamp("2026-03-20").timestamp())
+    symbols = [
+        _fake_symbol("CMIG4", option_right=-1),  # a própria ação, não é opção
+        _fake_symbol("CMIGO115", option_right=1, option_strike=11.5, expiration_time=expiration_march),
+    ]
+    fake = FakeMT5(symbols=symbols)
+    provider = MT5Provider(mt5_module=fake)
+
+    expirations = provider.list_option_expirations("CMIG4.SA")  # ticker como vem do Yahoo/watchlist
+    assert len(expirations) == 1
+    puts = provider.download_put_chain("CMIG4.SA", expirations[0])
+    assert list(puts["contractSymbol"]) == ["CMIGO115"]
+
 
 def test_list_option_expirations_filters_and_sorts():
     symbols = [

@@ -29,19 +29,34 @@ um terminal MT5 de verdade neste ambiente — valide no seu simulador antes de c
   simulador, passe a taxa manualmente para quem precisa dela.
 - **Opções dependem 100% do corretor.** Nem todo corretor/demo MT5 lista opções, e a
   forma de nomear os símbolos varia muito entre eles. `list_option_expirations`/
-  `download_put_chain`/`download_call_chain` procuram símbolos cujo nome contém o
-  ticker (`option_group_pattern`, ajustável) e filtram pelos campos `option_right`/
-  `option_strike`/`expiration_time` que o MT5 define para instrumentos de opção — use
-  `inspect_symbol(...)` para conferir, num símbolo real do seu simulador, se esses
-  campos vêm preenchidos antes de confiar no resultado.
+  `download_put_chain`/`download_call_chain` procuram símbolos cujo nome contém a
+  **raiz** do ticker (`option_group_pattern`, ajustável — `_b3_root_ticker` tira o
+  sufixo `.SA` e o dígito de classe da B3, ex. `CMIG4.SA` -> `CMIG`, pra bater com o
+  código de opção `CMIGO115`; tickers dos EUA sem dígito final, ex. `DUK`, não mudam)
+  e filtram pelos campos `option_right`/`option_strike`/`expiration_time` que o MT5
+  define para instrumentos de opção — use `inspect_symbol(...)` para conferir, num
+  símbolo real do seu simulador, se esses campos vêm preenchidos antes de confiar no
+  resultado (achar o símbolo pelo nome não garante que esses campos estejam
+  preenchidos; corretoras que tratam opção como CFD genérico podem deixá-los vazios).
 """
 from __future__ import annotations
 
 import os
+import re
 
 import pandas as pd
 
 from .errors import MarketDataError
+
+
+def _b3_root_ticker(ticker: str) -> str:
+    """Raiz do ticker, sem o sufixo `.SA` do Yahoo nem o dígito de classe da B3
+    (`CMIG4.SA`/`CMIG4` -> `CMIG`, `TAEE11` -> `TAEE`) — é a partir dela que a B3
+    monta o código de negociação das opções (ex. `CMIGO115` = raiz `CMIG` + `O`
+    [venda, março] + `115` [strike]). Tickers sem dígito final (ex. `DUK`, nos EUA)
+    voltam inalterados."""
+    base = ticker[:-3] if ticker.upper().endswith(".SA") else ticker
+    return re.sub(r"\d+$", "", base)
 
 
 def _load_dotenv_if_available() -> None:
@@ -183,7 +198,7 @@ class MT5Provider:
         return float(tick.last) / 100
 
     def _option_symbols(self, ticker: str) -> list:
-        pattern = self.option_group_pattern.format(ticker=ticker)
+        pattern = self.option_group_pattern.format(ticker=_b3_root_ticker(ticker))
         symbols = self._mt5.symbols_get(group=pattern) or ()
         options = [
             symbol for symbol in symbols

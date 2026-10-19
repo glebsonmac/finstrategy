@@ -763,3 +763,45 @@ símbolo diferente de `*{ticker}*`. Próximo passo pedido ao usuário: rodar de 
 (o log agora mostra o motivo exato) e, se o corretor tiver opções desse ativo no
 Market Watch do terminal, me passar o nome de um símbolo real pra eu ajustar
 `option_group_pattern`/os campos lidos em `_option_symbols`.
+
+**2026-10-19 (sessão 9, continuação 4) — busca de opções B3 pela raiz do ticker**
+
+Essa última dúvida foi respondida pelo usuário: os ativos de interesse são do setor
+elétrico **da B3** (`CMIG4.SA`, `TAEE11.SA`, `CPFE3.SA`, `EGIE3.SA`, `CPLE3.SA`), e
+ele explicou o padrão de código de opção da B3 com um exemplo real: `CMIGO115` =
+raiz `CMIG` (sem o dígito de classe do ativo) + `O` (letra que codifica mês+tipo —
+A-L é compra Jan-Dez, M-X é venda Jan-Dez; `O` = venda, março) + `115` (sufixo de
+strike). Planejado com `EnterPlanMode`/`ExitPlanMode` antes de mexer no código, por
+pedido explícito do usuário; usuário pediu pra escopar só a correção da busca por
+nome primeiro, deixando o decodificador mês/tipo/strike pra depois (só se este teste
+mostrar que é necessário).
+
+**Causa raiz confirmada:** `_option_symbols` montava o filtro de busca
+(`symbols_get(group=...)`) com o **ticker completo** (`"*CMIG4*"`), que nunca bate
+com `"CMIGO115"` — falta o "4". Determinístico, não dependia de nada específico do
+corretor.
+
+- [x] `data/mt5_provider.py`: `_b3_root_ticker(ticker)` novo — tira o sufixo `.SA`
+      do Yahoo e o dígito de classe da B3 (`CMIG4.SA`→`CMIG`, `TAEE11`→`TAEE`);
+      ticker sem dígito final (EUA, ex. `DUK`) volta inalterado. `_option_symbols`
+      passou a montar o padrão com a raiz em vez do ticker cru.
+- [x] `tests/test_mt5_provider.py`: `FakeMT5.symbols_get` antes **ignorava** o
+      parâmetro `group` (sempre devolvia tudo) — isso escondia o próprio bug que
+      estava sendo corrigido. Trocado para filtrar de verdade via
+      `fnmatch.fnmatch(nome, group)`, igual o MT5 real. 11 testes novos: 9 casos de
+      `_b3_root_ticker` (B3 com/sem `.SA`, EUA inalterado), 1 regressão explícita
+      mostrando que `*CMIG4*` não bate em `CMIGO115` mas `*CMIG*` bate, e 1 ponta a
+      ponta com `CMIGO115` de verdade (`list_option_expirations`/
+      `download_put_chain` com ticker `CMIG4.SA`). 203 testes no total (eram 192).
+
+**O que essa correção não resolve sozinha (comunicado ao usuário antes de
+implementar):** achar o símbolo pelo nome não garante que a corretora preencha
+`option_right`/`option_strike`/`expiration_time` em `symbol_info()` para códigos
+B3 — se não preencher, `_option_symbols` ainda descarta o símbolo (agora com motivo
+visível no log). Decisão tomada com o usuário: não construir um decodificador do
+código B3 como fallback de strike especulativamente — strike sempre do campo do
+MT5, nunca adivinhado por escala decimal do sufixo numérico (ambíguo, sem regra
+única entre séries da B3); só decodificar mês/tipo do código (esses sim 100%
+determinísticos) se o teste real mostrar que os campos do MT5 não vêm preenchidos.
+Próximo passo: usuário roda de novo no Windows e confirma se `CMIGO115` (ou
+equivalente) aparece agora.
