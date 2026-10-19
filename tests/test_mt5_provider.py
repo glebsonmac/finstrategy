@@ -22,13 +22,19 @@ def _fake_symbol(name, option_right=-1, option_strike=0.0, expiration_time=0, op
 class FakeMT5:
     TIMEFRAME_D1 = "D1"
 
-    def __init__(self, initialize_ok=True, symbols=(), ticks=None, rates=None):
+    def __init__(self, initialize_ok=True, symbols=(), ticks=None, rates=None,
+                 broad_search_pattern=None, broad_search_results=()):
         self.initialize_ok = initialize_ok
         self.initialize_calls = []
         self.symbols = list(symbols)
         self.ticks = ticks or {}
         self.rates = rates or {}
         self.selected = []
+        # Simula o bug real relatado pelo usuário: uma busca ampla ("*CMIG*") só
+        # devolve o vencimento mais próximo, não todos os meses — só buscar pela
+        # letra específica de cada mês recupera o resto (ver _option_symbols).
+        self.broad_search_pattern = broad_search_pattern
+        self.broad_search_results = set(broad_search_results)
 
     def initialize(self, **kwargs):
         self.initialize_calls.append(kwargs)
@@ -59,6 +65,8 @@ class FakeMT5:
         # testes abaixo existem pra pegar.
         if group is None:
             return tuple(self.symbols)
+        if self.broad_search_pattern is not None and group == self.broad_search_pattern:
+            return tuple(s for s in self.symbols if s.name in self.broad_search_results)
         return tuple(s for s in self.symbols if fnmatch.fnmatch(s.name, group))
 
     def copy_rates_range(self, symbol, timeframe, start, end):
@@ -242,6 +250,32 @@ def test_list_option_expirations_finds_b3_style_option_by_root_ticker():
     assert len(expirations) == 1
     puts = provider.download_put_chain("CMIG4.SA", expirations[0])
     assert list(puts["contractSymbol"]) == ["CMIGO115"]
+
+
+def test_option_symbols_letter_iteration_recovers_series_a_broad_search_misses():
+    # Reproduz o caso real relatado pelo usuário: rodando contra um corretor de
+    # verdade, uma busca ampla (*CMIG*) só trouxe o vencimento de outubro, não os
+    # outros meses. Simula exatamente isso na fake e confirma que varrer letra por
+    # letra (comportamento novo de _option_symbols) recupera janeiro e março também.
+    jan_exp = int(pd.Timestamp("2026-01-16").timestamp())
+    mar_exp = int(pd.Timestamp("2026-03-20").timestamp())
+    oct_exp = int(pd.Timestamp("2026-10-16").timestamp())
+    symbols = [
+        _fake_symbol("CMIGM100", option_right=1, option_strike=10.0, expiration_time=jan_exp),
+        _fake_symbol("CMIGO105", option_right=1, option_strike=10.5, expiration_time=mar_exp),
+        _fake_symbol("CMIGV110", option_right=1, option_strike=11.0, expiration_time=oct_exp),
+    ]
+    fake = FakeMT5(symbols=symbols, broad_search_pattern="*CMIG*", broad_search_results={"CMIGV110"})
+    provider = MT5Provider(mt5_module=fake)
+
+    # confere que a simulação do bug está certa: a busca ampla à moda antiga só acharia outubro
+    assert [s.name for s in fake.symbols_get(group="*CMIG*")] == ["CMIGV110"]
+
+    expirations = provider.list_option_expirations("CMIG4.SA")
+    assert len(expirations) == 3  # jan, mar e out — não só out
+
+    puts = provider.download_put_chain("CMIG4.SA", pd.Timestamp("2026-01-16"))
+    assert list(puts["contractSymbol"]) == ["CMIGM100"]
 
 
 def test_list_option_expirations_filters_and_sorts():

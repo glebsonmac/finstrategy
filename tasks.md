@@ -805,3 +805,61 @@ MT5, nunca adivinhado por escala decimal do sufixo numérico (ambíguo, sem regr
 determinísticos) se o teste real mostrar que os campos do MT5 não vêm preenchidos.
 Próximo passo: usuário roda de novo no Windows e confirma se `CMIGO115` (ou
 equivalente) aparece agora.
+
+**2026-10-19 (sessão 9, continuação 5) — pesquisa do COTAHIST (B3) + busca por
+letra de mês no MT5**
+
+Usuário testou a correção da raiz do ticker: achou opções, mas só do vencimento de
+outubro — os outros meses não apareciam. Ele pediu pra eu pesquisar na internet como
+a B3 separa dados históricos por ano, porque queria 4 anos de PUT/CALL por ticker,
+igual já funciona pro preço da ação.
+
+**Pesquisa feita** (`WebSearch` + `WebFetch` no layout oficial em PDF da B3,
+validado contra dados reais baixados de `bvmf.bmfbovespa.com.br/InstDados/SerHist/
+COTAHIST_A2023.ZIP`): a B3 publica um arquivo texto de largura fixa por ano
+(COTAHIST_A{ano}.ZIP, grátis, sem login, ~500-600MB descompactado), com TODO o
+histórico diário de todos os papéis — ação e opção juntos — incluindo campos
+estruturados de tipo de mercado (TPMERC: 010=vista, 070=opção de compra,
+080=opção de venda), strike (PREEXE) e vencimento (DATVEN) prontos, sem precisar
+decodificar o código. Confirmei isso batendo o exemplo do próprio usuário contra o
+arquivo real: `CMIGO105`, TPMERC=080 (venda), DATVEN=2023-03-17 — bate exatamente
+com "O = PUT de março".
+
+**Propus usar o COTAHIST pro backfill de anos; usuário recusou.** Quer continuar só
+com MT5 (preço da ação já validado funcionando, não quer trocar a fonte) e pediu
+especificamente pra eu ajustar a busca de opção pra "varrer todas as letras de mês",
+focando em PUT. Respeitei a decisão — COTAHIST não foi implementado, só a pesquisa
+fica registrada aqui caso vire necessário no futuro.
+
+**Causa provável de só vir outubro:** `_option_symbols` fazia uma busca ampla só
+(`symbols_get(group="*CMIG*")`); a hipótese mais provável é o `symbols_get` do
+MT5/corretor limitar ou só reter na busca genérica os contratos **atualmente mais
+próximos do vencimento** — normalmente só 1-3 séries da B3 ficam realmente ativas
+por vez, não as 12.
+
+- [x] `data/mt5_provider.py`: `_B3_CALL_MONTH_LETTERS`/`_B3_PUT_MONTH_LETTERS`
+      novos (tabela oficial B3: A-L compra, M-X venda, jan-dez). `_option_symbols`
+      ganhou parâmetro `right` e, pra tickers "estilo B3" (com dígito de classe,
+      detectado por `_is_b3_style_ticker` novo), passou a varrer **letra por
+      letra** (`*CMIGM*`, `*CMIGN*`, ... uma chamada de `symbols_get` por letra,
+      juntando os resultados sem duplicar) em vez de uma busca ampla só. Tickers
+      "estilo EUA" (sem dígito, ex. `DUK`) continuam com a busca única de sempre —
+      sem mudança de comportamento aí. `list_option_expirations`/`_download_chain`
+      passam o `right` relevante (todas as 24 letras vs. só as 12 de put/call).
+- [x] `tests/test_mt5_provider.py`: `FakeMT5` ganhou um modo de simular o bug real
+      relatado (busca ampla devolve só 1 símbolo "visível"; busca pela letra
+      específica devolve o resto) — único jeito de escrever um teste que prova
+      que a iteração por letra resolve o que a busca única não resolvia. 1 teste
+      novo de regressão (busca ampla só acha outubro; busca por letra acha
+      janeiro/março/outubro). 204 testes no total (eram 203).
+
+**Limitação comunicada ao usuário antes de implementar (não é um bug, é uma
+característica do MT5/corretora):** isso não dá "4 anos de histórico" de opção —
+só aumenta a chance de achar todas as séries **atualmente existentes** no
+terminal. Contrato de opção vencido há anos geralmente não existe mais no servidor
+do MT5 pra nenhuma busca encontrar; se o resultado real mostrar que só 1 vencimento
+aparece mesmo variando a letra, a causa não é mais a busca (código), é a própria
+corretora não retendo séries passadas — nesse caso o COTAHIST pesquisado acima
+volta a ser a única opção real pra histórico de anos.
+
+Próximo passo: usuário roda de novo no Windows e conta quantos meses aparecem agora.

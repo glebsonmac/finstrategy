@@ -28,16 +28,21 @@ um terminal MT5 de verdade neste ambiente — valide no seu simulador antes de c
   (`risk_free_symbol`, ex. um CFD de título do tesouro); se não tiver um no seu
   simulador, passe a taxa manualmente para quem precisa dela.
 - **Opções dependem 100% do corretor.** Nem todo corretor/demo MT5 lista opções, e a
-  forma de nomear os símbolos varia muito entre eles. `list_option_expirations`/
-  `download_put_chain`/`download_call_chain` procuram símbolos cujo nome contém a
-  **raiz** do ticker (`option_group_pattern`, ajustável — `_b3_root_ticker` tira o
-  sufixo `.SA` e o dígito de classe da B3, ex. `CMIG4.SA` -> `CMIG`, pra bater com o
-  código de opção `CMIGO115`; tickers dos EUA sem dígito final, ex. `DUK`, não mudam)
-  e filtram pelos campos `option_right`/`option_strike`/`expiration_time` que o MT5
-  define para instrumentos de opção — use `inspect_symbol(...)` para conferir, num
-  símbolo real do seu simulador, se esses campos vêm preenchidos antes de confiar no
+  forma de nomear os símbolos varia muito entre eles. Para tickers "estilo B3" (com
+  dígito de classe, ex. `CMIG4` -> raiz `CMIG`), a busca de opção varre **letra por
+  letra** do código de negociação (`*CMIGM*`, `*CMIGN*`, ... — tabela oficial B3,
+  `_B3_CALL_MONTH_LETTERS`/`_B3_PUT_MONTH_LETTERS`), porque uma busca ampla só
+  (`*CMIG*`) testada ao vivo trouxe só o vencimento mais próximo (ex. só outubro),
+  não todos os meses. Para tickers "estilo EUA" (sem dígito, ex. `DUK`), continua
+  uma busca só (`option_group_pattern`). Em ambos os casos, o resultado é filtrado
+  pelos campos `option_right`/`option_strike`/`expiration_time` que o MT5 define
+  para instrumentos de opção — use `inspect_symbol(...)` para conferir, num símbolo
+  real do seu simulador, se esses campos vêm preenchidos antes de confiar no
   resultado (achar o símbolo pelo nome não garante que esses campos estejam
   preenchidos; corretoras que tratam opção como CFD genérico podem deixá-los vazios).
+  **Isso não dá histórico de anos passados:** só aumenta a chance de achar todas as
+  séries **atualmente existentes** no terminal: contrato de opção já vencido
+  geralmente não existe mais no servidor do MT5 pra nenhuma busca encontrar.
 """
 from __future__ import annotations
 
@@ -57,6 +62,18 @@ def _b3_root_ticker(ticker: str) -> str:
     voltam inalterados."""
     base = ticker[:-3] if ticker.upper().endswith(".SA") else ticker
     return re.sub(r"\d+$", "", base)
+
+
+def _is_b3_style_ticker(ticker: str) -> bool:
+    """Um ticker "estilo B3" tem dígito de classe no final (`CMIG4`, `TAEE11`) — é
+    esse dígito que `_b3_root_ticker` corta. Tickers dos EUA (ex. `DUK`) não têm."""
+    return _b3_root_ticker(ticker) != (ticker[:-3] if ticker.upper().endswith(".SA") else ticker)
+
+
+# Tabela oficial B3 de letra do código de negociação de opção -> mês + lado
+# (compra/venda). Ex.: CMIGO115 tem "O" -> venda (PUT), março.
+_B3_CALL_MONTH_LETTERS = "ABCDEFGHIJKL"  # jan..dez, opção de compra
+_B3_PUT_MONTH_LETTERS = "MNOPQRSTUVWX"   # jan..dez, opção de venda
 
 
 def _load_dotenv_if_available() -> None:
@@ -197,16 +214,38 @@ class MT5Provider:
             raise MarketDataError(f"sem cotação para '{self.risk_free_symbol}' no MT5")
         return float(tick.last) / 100
 
-    def _option_symbols(self, ticker: str) -> list:
-        pattern = self.option_group_pattern.format(ticker=_b3_root_ticker(ticker))
-        symbols = self._mt5.symbols_get(group=pattern) or ()
+    def _option_symbols(self, ticker: str, right: int | None = None) -> list:
+        """Lista os símbolos de opção do ticker. Tickers "estilo EUA" (sem dígito de
+        classe, ex. `DUK`) usam uma busca só (`option_group_pattern`, de sempre).
+
+        Tickers "estilo B3" (ex. `CMIG4`) varrem **letra por letra** do código de
+        negociação (`*{raiz}{letra}*`, uma chamada de `symbols_get` por letra, só
+        as letras do `right` pedido — ou as 24, se `right=None`) em vez de uma
+        busca ampla só (`*{raiz}*`). Motivo: testado ao vivo contra um corretor
+        real, a busca ampla só trouxe o vencimento mais próximo (ex. outubro) —
+        aparentemente o `symbols_get` do MT5/corretor limita ou não retorna tudo
+        numa busca genérica; buscar pela letra específica de cada mês recupera as
+        séries que a busca ampla não trazia."""
+        root = _b3_root_ticker(ticker)
+        if _is_b3_style_ticker(ticker):
+            letters = {0: _B3_CALL_MONTH_LETTERS, 1: _B3_PUT_MONTH_LETTERS}.get(right, _B3_CALL_MONTH_LETTERS + _B3_PUT_MONTH_LETTERS)
+            by_name = {}
+            for letter in letters:
+                for symbol in self._mt5.symbols_get(group=f"*{root}{letter}*") or ():
+                    by_name[symbol.name] = symbol
+            symbols = by_name.values()
+            pattern_for_error = f"*{root}[{letters}]*"
+        else:
+            pattern_for_error = self.option_group_pattern.format(ticker=root)
+            symbols = self._mt5.symbols_get(group=pattern_for_error) or ()
+
         options = [
             symbol for symbol in symbols
             if getattr(symbol, "option_right", -1) in (0, 1) and getattr(symbol, "option_strike", 0) > 0
         ]
         if not options:
             raise MarketDataError(
-                f"nenhum símbolo de opção encontrado no MT5 para '{pattern}' ({self._last_error()}) — "
+                f"nenhum símbolo de opção encontrado no MT5 para '{pattern_for_error}' ({self._last_error()}) — "
                 "confira o padrão de nome dos símbolos de opção do seu corretor com inspect_symbol(...) "
                 "e ajuste option_group_pattern se precisar."
             )
@@ -227,7 +266,7 @@ class MT5Provider:
 
     def _download_chain(self, ticker: str, expiration: pd.Timestamp, right: int) -> pd.DataFrame:
         rows = []
-        for symbol in self._option_symbols(ticker):
+        for symbol in self._option_symbols(ticker, right=right):
             if getattr(symbol, "option_right", None) != right:
                 continue
             expiration_time = getattr(symbol, "expiration_time", 0)
