@@ -40,6 +40,23 @@ def read_csv(csv_path: Path | str) -> pd.DataFrame:
     return pd.read_csv(csv_path)
 
 
+def sort_csv_by(csv_path: Path | str, by: str) -> None:
+    """Reordena um CSV existente por uma coluna (ex.: `by="date"`, crescente por
+    padrão com `sort_values`). Usado pelos logs "sempre anexa embaixo" (ver
+    `collector/mt5_daily_log.py`) para ficarem em ordem cronológica mesmo coletando
+    fora de ordem em dias diferentes. Não faz nada se o arquivo não existir, estiver
+    vazio ou não tiver a coluna — seguro de chamar sempre, mesmo na primeira rodada."""
+    csv_path = Path(csv_path)
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        return
+    frame = pd.read_csv(csv_path)
+    if frame.empty or by not in frame.columns:
+        return
+    frame = frame.sort_values(by, kind="stable").reset_index(drop=True)
+    with _write_lock:
+        frame.to_csv(csv_path, index=False)
+
+
 def market_csv_path(data_store_root: Path | str, ticker: str, as_of_date) -> Path:
     date_str = pd.Timestamp(as_of_date).strftime("%Y-%m-%d")
     safe_ticker = ticker.replace("/", "_")

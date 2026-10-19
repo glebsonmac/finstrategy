@@ -17,6 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Só instala em Python nativo do Windows (o pacote não publica wheel para mac/Linux) —
+# ver src/finstrategy/data/mt5_provider.py.
+mt5 = ["MetaTrader5"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

@@ -28,7 +28,8 @@ pregão). Isso é esperado — o notebook já trata preço zerado/bid-ask zerado
       (testado manualmente contra o Yahoo real: AAPL ok/com opções, TAEE11.SA ok/sem
       opções, ticker inválido levanta erro claro)
 - [x] `data/fundamentals_provider.py` — indicadores fundamentalistas normalizados
-- [x] `data/mt5_provider.py` — stub `NotImplementedError`
+- [x] `data/mt5_provider.py` — stub `NotImplementedError` no MVP inicial; implementado
+      de verdade na sessão de 2026-10-19 (ver log de execução no fim deste arquivo)
 - [x] `data/watchlist.py` — CRUD sobre `config/watchlist.yaml`, `add_tickers` dispara
       fundamentalista automaticamente, `ensure_seeded` testado de ponta a ponta
 - [x] testes automatizados (`pytest`, com mocks — sem depender de rede/mercado aberto):
@@ -267,8 +268,6 @@ pela tela "Histórico & Relatórios" via `render_risk_analysis_section` em `app.
       da DQN de entrada) — nenhum erro no log do servidor durante os testes
 
 ## O que falta (backlog, fora do MVP implementado nesta sessão)
-- MetaTrader5 (`data/mt5_provider.py`) — decisão da seção 0 do plan.md ainda pendente,
-  módulo é só um stub com `NotImplementedError`
 - Fonte alternativa de opções para B3 (hoje qualquer `.SA` sem opções no Yahoo fica
   "não elegível", por decisão explícita do usuário — ver plan.md seção 0)
 - Modo dry-run/replay explícito do coletor sobre CSV já salvo (hoje só roda contra
@@ -599,3 +598,73 @@ derivativo líquido no Yahoo na data em que se testa — reavaliar periodicament
 
 Nenhum teste automatizado afetado (mudança é só nos notebooks, não em `src/`); 150
 testes seguem passando.
+
+**2026-10-19 (sessão 9) — MetaTrader5 implementado: provider + coleta diária em log**
+
+Pedido do usuário: implementar a parte de MT5 (até então um stub `NotImplementedError`,
+decisão pendente desde a Fase 1/seção 0 do plan.md). Objetivo explícito: coletar do
+MT5 (simulador/demo) e gravar dois CSVs **estilo log** — cada rodada só anexa linhas
+embaixo das anteriores, nunca sobrescreve — pensado pra rodar uma vez por dia, por
+vários dias, com reordenação por data no fim. Cada linha é o **fechamento do dia**
+(nunca intradiário). Foco explícito: dados que alimentem direto o Black-Scholes
+(entrada ação+opção) e o Monte Carlo (variação), então a estrutura precisa ser
+"simples e legível", sem join entre os dois CSVs.
+
+**Limitação de ambiente, registrada com transparência:** o pacote `MetaTrader5` só
+instala em Python nativo do Windows e só funciona com o terminal aberto e logado —
+nada disso existe neste ambiente de desenvolvimento (macOS, sem terminal MT5). Por
+isso a implementação não pôde ser validada contra um MT5 de verdade, ao contrário do
+resto do sistema (que sempre foi testado ao vivo antes de marcar como pronto). Pra não
+abrir mão de testar o que dá pra testar, `MT5Provider` recebe o módulo `MetaTrader5`
+por injeção de dependência (`mt5_module=`, default: importa o pacote de verdade) —
+isso permitiu escrever um dublê (`FakeMT5`, mesmo padrão `FakeProvider` já usado em
+`test_scheduler.py`/`test_overnight.py`) e testar toda a lógica em volta da API real
+(parsing de `copy_rates_range`, fallback de preço, filtro de `option_right`/
+`option_strike`/`expiration_time`, etc.) sem precisar do pacote real instalado.
+
+- [x] `data/mt5_provider.py` reescrito — implementa `MarketDataProvider` via
+      `MetaTrader5`: `download_price_history` (`copy_rates_range` + `TIMEFRAME_D1`),
+      `get_current_stock_price` (tick `last`, cai pro `bid`), `list_option_expirations`/
+      `download_put_chain`/`download_call_chain` (via `symbols_get(group=...)`,
+      filtrando pelos campos de opção do MT5: `option_right`/`option_strike`/
+      `expiration_time`). Duas limitações documentadas na própria docstring do módulo,
+      não contornáveis (não são bug, são o que a API do MT5 realmente expõe):
+      **sem fundamentalista** (`get_trailing_dividend_yield` sempre `0.0` — o dado
+      fundamentalista completo do coletor continua vindo do Yahoo) e **sem taxa livre
+      de risco padrão** (`get_risk_free_rate` exige um `risk_free_symbol` configurado
+      pelo usuário, levanta `MarketDataError` claro se não tiver). `inspect_symbol(...)`
+      novo: dump cru de `symbol_info()` pra o usuário conferir, contra um símbolo real
+      do próprio simulador, se os campos de opção vêm preenchidos — a nomenclatura de
+      símbolo de opção varia muito entre corretoras no MT5, não dá pra generalizar.
+- [x] `collector/csv_store.py` ganhou `sort_csv_by(csv_path, by)` — reordena um CSV
+      existente por coluna (usado pra "date" crescente), no-op seguro se o arquivo não
+      existir/estiver vazio/não tiver a coluna.
+- [x] `collector/mt5_daily_log.py` novo — `collect_stock_row` (fechamento mais recente
+      do MT5 + fundamentalista do Yahoo, nunca lança, falha vira `status`, mesmo padrão
+      defensivo de `overnight.py`), `collect_option_rows` (uma linha por call/put
+      líquida do vencimento mais próximo, com `underlying_price` já na linha — decisão
+      deliberada de duplicar esse dado em vez de exigir join, pra bater o pedido de
+      "estrutura simples", já que o uso real é abrir o CSV de opções sozinho e rodar
+      Black-Scholes direto) e `run_daily_collection` (orquestra os dois, anexa via
+      `csv_store.append_rows`, reordena por data via `sort_csv_by` no fim de cada
+      rodada). CLI própria (`main`) + `scripts/collect_mt5_daily.py`, mesmo par
+      collector/script de `overnight.py`/`collect_overnight.py`.
+- [x] `pyproject.toml`: grupo opcional `mt5 = ["MetaTrader5"]` (não é dependência
+      padrão — não instala fora do Windows).
+- [x] 33 testes novos, todos passando sem precisar do pacote `MetaTrader5` real:
+      `tests/test_mt5_provider.py` (20, via `FakeMT5`), `tests/test_mt5_daily_log.py`
+      (9, via `FakeProvider`), 4 novos em `tests/test_csv_store.py` (`sort_csv_by`).
+      183 testes no total (eram 150).
+- [x] README.md: seção "5b. Coleta diária via MT5" (uso, duas colunas do CSV,
+      aviso sobre `inspect_symbol`) + linhas atualizadas nas tabelas de `data/`,
+      `collector/` e `scripts/` + contagem de testes corrigida (129 → 183, já estava
+      desatualizada antes desta sessão).
+
+**O que o usuário ainda precisa validar manualmente** (não dá pra fazer neste
+ambiente): conectar num terminal MT5 real/simulador, rodar `inspect_symbol(...)` num
+símbolo de opção de verdade do corretor escolhido pra confirmar que `option_right`/
+`option_strike`/`expiration_time` vêm preenchidos como o código espera, e ajustar
+`option_group_pattern` se o padrão de nome dos símbolos do corretor for diferente de
+`"*{ticker}*"`. Fica registrado como item de validação pendente, não como
+"funcionalidade incompleta" — a lógica em volta da API está testada, a API em si não
+pôde ser exercitada de verdade aqui.

@@ -84,6 +84,40 @@ Exemplo de agendamento com `cron` (roda todo dia às 23h, horário local):
 0 23 * * * cd /caminho/do/projeto/finstrategy && .venv/bin/python scripts/collect_overnight.py >> data_store/overnight/cron.log 2>&1
 ```
 
+### 5b. Coleta diária via MT5 (simulador/demo)
+
+Pensado para quando a fonte de preço/opções é um terminal MetaTrader5 (simulador ou
+conta demo) em vez do Yahoo — por exemplo, para repetir a coleta por vários dias
+seguidos até acumular histórico suficiente para o GARCH Monte Carlo e o Black-Scholes.
+Só funciona em **Python nativo do Windows**, com o terminal MT5 **aberto e logado**.
+
+```bash
+# instala a dependência opcional (só no Windows)
+pip install -e ".[mt5]"
+
+# com o terminal MT5 já aberto e logado no simulador/demo
+python scripts/collect_mt5_daily.py --tickers AAPL,DUK,NEE
+```
+
+Cada rodada **anexa** (nunca sobrescreve) uma linha por ticker em dois CSVs de log —
+sempre o fechamento do dia, nunca um preço intradiário:
+
+- `data_store/mt5/acoes_diario.csv`: ticker + fechamento (MT5) + indicadores
+  fundamentalistas (Yahoo — o MT5 não tem fundamentalista).
+- `data_store/mt5/opcoes_diario.csv`: cada call/put líquida do vencimento mais
+  próximo, com prêmio/strike/vencimento/preço do ativo-objeto na mesma linha.
+
+Depois de cada rodada, os dois CSVs são reordenados por data (crescente) — dá para
+rodar fora de ordem em dias diferentes que o resultado continua legível. Não
+deduplica: rodar duas vezes no mesmo dia grava duas linhas para aquele dia.
+
+**Antes de confiar nos dados de opção**, a forma de nomear símbolos de opção varia
+muito entre corretoras no MT5. Use `MT5Provider(...).inspect_symbol("SEU_SIMBOLO")`
+num console Python para conferir se os campos `option_right`/`option_strike`/
+`expiration_time` vêm preenchidos no seu simulador antes de rodar a coleta de verdade
+— ver a docstring de `src/finstrategy/data/mt5_provider.py` para detalhes e limitações
+(sem fundamentalista, sem taxa livre de risco padrão).
+
 ### 6. Rodar os testes
 
 ```bash
@@ -135,7 +169,7 @@ pytest
 | `base.py` | Define o "contrato" `MarketDataProvider` (preço, dividendo, opções, taxa livre de risco) que qualquer fonte de dado precisa implementar, mais os tipos `SymbolMatch`/`SymbolInfo` usados na busca de ticker. |
 | `errors.py` | `MarketDataError` — o erro usado em todo o sistema para "esse dado não existe/não está disponível agora" (ex.: ação sem opção). Não é um bug, é um estado esperado. |
 | `yahoo_provider.py` | Implementação do `MarketDataProvider` via `yfinance`: histórico de preço, preço atual, dividendo, taxa livre de risco (`^IRX`), cadeia de puts/calls. Extraído do notebook original, sem mudar o comportamento. |
-| `mt5_provider.py` | Placeholder do MetaTrader5 — levanta `NotImplementedError` até a decisão (plan.md, seção 0) de entrar no escopo ou não. |
+| `mt5_provider.py` | Implementação do `MarketDataProvider` via o pacote `MetaTrader5` (Windows + terminal/simulador aberto; `pip install -e ".[mt5]"`). Preço e cadeia de opções vêm do MT5; fundamentalista continua vindo do Yahoo (o MT5 não tem). Limitações e como conectar: ver docstring do arquivo. |
 | `symbol_search.py` | Busca/valida ticker **ao vivo** no Yahoo: `search_symbols` (autocomplete por nome/código) e `validate_symbol`/`validate_symbols` (confirma que um ticker existe e tem preço antes de entrar na watchlist). |
 | `local_stock_list.py` | Mesma ideia, mas **sem rede**: filtra `config/us_stock_list.csv` (S&P 500) em memória — instantâneo, usado na aba "Lista" do frontend. |
 | `fundamentals_provider.py` | Indicadores fundamentalistas normalizados (P/L, ROE, dívida/patrimônio, dividend yield, etc.) a partir do `yfinance`. Cuidado documentado aqui: `dividendYield` do Yahoo vem em escala diferente dos outros campos de percentual — já normalizado. |
@@ -170,6 +204,7 @@ pytest
 | `csv_store.py` | Escrita append-safe em CSV, particionada por ticker/dia (`market_csv_path`, `fundamentals_csv_path`, `model_runs_csv_path`, `reports_csv_path`). |
 | `scheduler.py` | O coletor **contínuo**: `run_forever` fica rodando o dia inteiro, só ativo durante o pregão, controlado pela tela "Coletor" do Streamlit. Escreve `data_store/collector_status.json` a cada ciclo (`write_status`/`read_status`) para o frontend mostrar status ao vivo. Qualquer erro vira status, nunca derruba a thread. |
 | `overnight.py` | O coletor de **uma rodada só** (`run_overnight_collection`), pensado para `cron`, sem precisar do Streamlit nem do mercado aberto — grava um CSV único com cotação + fundamentalista de cada ticker. Usado por `scripts/collect_overnight.py`. |
+| `mt5_daily_log.py` | Coleta diária via MT5 em dois CSVs **log** (`data_store/mt5/`, append-only — cada rodada só adiciona linhas embaixo, nunca sobrescreve): `acoes_diario.csv` (fechamento do dia + fundamentalista) e `opcoes_diario.csv` (cada call/put líquida, com prêmio/strike/vencimento). Reordena os dois por data ao final de cada rodada (`csv_store.sort_csv_by`). Usado por `scripts/collect_mt5_daily.py`. |
 
 ### `src/finstrategy/reporting/` — relatórios
 
@@ -208,10 +243,13 @@ limites de risco, parâmetros do Monte Carlo e das DQNs). `load_settings`/
 | Arquivo | O que faz |
 |---|---|
 | `collect_overnight.py` | Wrapper de linha de comando para `collector/overnight.py` — a coleta noturna (ver seção 5 acima). |
+| `collect_mt5_daily.py` | Wrapper de linha de comando para `collector/mt5_daily_log.py` — a coleta diária via MT5 (ver seção 5b acima). |
 | `rank_us_megacaps.py` | Reavalia o top-20 EUA ao vivo no Yahoo; usado para gerar/atualizar `config/us_top20_megacaps.yaml`. |
 
 ### `tests/`
 
 Um arquivo de teste por módulo de `src/finstrategy/` (mesma nomenclatura), quase todos
-usando mocks/fakes para não depender de rede nem do mercado estar aberto — 129 testes
-no total. Rodar com `pytest`.
+usando mocks/fakes para não depender de rede nem do mercado estar aberto — 183 testes
+no total. Rodar com `pytest`. `test_mt5_provider.py` usa um dublê do pacote
+`MetaTrader5` (não instala fora do Windows) — não substitui testar contra um terminal
+MT5 de verdade, só garante que a lógica em volta dele está correta.

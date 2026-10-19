@@ -9,6 +9,7 @@ from finstrategy.collector.csv_store import (
     model_runs_csv_path,
     read_csv,
     reports_csv_path,
+    sort_csv_by,
 )
 
 
@@ -67,3 +68,34 @@ def test_model_runs_and_reports_csv_path_by_day(tmp_path):
 
 def test_fundamentals_csv_path_by_ticker(tmp_path):
     assert fundamentals_csv_path(tmp_path, "AAPL") == tmp_path / "fundamentals" / "AAPL.csv"
+
+
+def test_sort_csv_by_reorders_rows_ascending(tmp_path):
+    csv_path = tmp_path / "log.csv"
+    append_rows(csv_path, [{"date": "2026-10-15", "ticker": "DUK"}])
+    append_rows(csv_path, [{"date": "2026-10-13", "ticker": "NEE"}])
+    append_rows(csv_path, [{"date": "2026-10-14", "ticker": "AEP"}])
+    sort_csv_by(csv_path, "date")
+    frame = read_csv(csv_path)
+    assert list(frame["date"]) == ["2026-10-13", "2026-10-14", "2026-10-15"]
+    assert list(frame["ticker"]) == ["NEE", "AEP", "DUK"]
+
+
+def test_sort_csv_by_keeps_relative_order_within_same_date(tmp_path):
+    csv_path = tmp_path / "log.csv"
+    append_rows(csv_path, [{"date": "2026-10-13", "ticker": "DUK"}, {"date": "2026-10-13", "ticker": "NEE"}])
+    sort_csv_by(csv_path, "date")
+    frame = read_csv(csv_path)
+    assert list(frame["ticker"]) == ["DUK", "NEE"]
+
+
+def test_sort_csv_by_does_nothing_when_file_missing(tmp_path):
+    sort_csv_by(tmp_path / "nope.csv", "date")  # não deve lançar
+
+
+def test_sort_csv_by_does_nothing_when_column_absent(tmp_path):
+    csv_path = tmp_path / "log.csv"
+    append_rows(csv_path, [{"ticker": "DUK"}])
+    sort_csv_by(csv_path, "date")  # coluna "date" não existe
+    frame = read_csv(csv_path)
+    assert list(frame["ticker"]) == ["DUK"]
