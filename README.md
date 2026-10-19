@@ -197,6 +197,14 @@ ano que não estiver disponível no servidor da B3 (ou uma falha de rede) é **p
 um aviso** (`WARNING:`) — não derruba a coleta dos outros anos, então dá para pedir
 `2010-2026` sem medo de um ano ruim zerar tudo.
 
+Entre o download de um ano e o do próximo há uma **pausa aleatória de 0 a 60s**
+(`--sleep`, default 60) — rate-limiting educado para espaçar o tráfego quando se baixa
+muitos anos de uma vez. A pausa só acontece em download de verdade; ano lido do cache
+não pausa (leitura local não toca a B3). Use `--sleep 0` para desligar ou `--sleep 30`
+para encurtar. (Observação: isto é espaçar requisições, o jeito legítimo de não
+sobrecarregar a B3 — não há, de propósito, nenhuma rotação de IP/MAC/User-Agent para
+burlar bloqueio; com cache em disco o volume já é baixo.)
+
 Gera, em `data_store/cotahist/` (ou `--output-dir`), um CSV consolidado mais um por
 classe pedida (`eletrico_acao_*.csv`, `eletrico_call_*.csv`, `eletrico_put_*.csv`), com
 OHLC/volume por pregão e, nas opções, `preexe` (strike) e `datven` (vencimento) na

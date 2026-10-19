@@ -94,6 +94,16 @@ def main() -> int:
         help="Onde gravar os CSVs de saída (default: data_store/cotahist).",
     )
     parser.add_argument(
+        "--sleep",
+        type=float,
+        default=60.0,
+        help=(
+            "Pausa ALEATÓRIA de 0 até N segundos entre downloads de anos "
+            "(rate-limiting educado; default 60 = até 1 min). Só vale para downloads "
+            "de verdade — não pausa em anos lidos do cache. Use 0 para desligar."
+        ),
+    )
+    parser.add_argument(
         "--force-download",
         action="store_true",
         help="Rebaixa os .ZIP mesmo que já estejam no cache.",
@@ -122,6 +132,7 @@ def main() -> int:
         anos,
         classes=classes,
         force_download=args.force_download,
+        sleep_max=args.sleep,
     )
 
     if df.empty:

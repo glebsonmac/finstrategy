@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import io
 import logging
+import random
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -178,6 +180,7 @@ class CotahistProvider:
         classes: list[str] | None = None,
         force_download: bool = False,
         skip_missing_years: bool = True,
+        sleep_max: float = 0.0,
     ) -> pd.DataFrame:
         """Cotações de um setor (ações à vista e/ou opções) para vários anos.
 
@@ -198,6 +201,11 @@ class CotahistProvider:
         problema interrompe tudo (comportamento antigo). Isso é o que te deixa pedir
         ``2010-2026`` sem um único ano ruim derrubar a coleta inteira.
 
+        `sleep_max`: se > 0, dorme um intervalo **aleatório** em ``[0, sleep_max]``
+        segundos *entre downloads de verdade* — rate-limiting educado, para espaçar o
+        tráfego quando se baixa vários anos de uma vez. Não dorme depois do último ano
+        nem quando o ano veio do cache (leitura local não toca a B3).
+
         Acrescenta a coluna ``classe`` com os valores ``acao`` / ``call`` / ``put``.
         """
         roots_norm = [r.strip().upper() for r in roots]
@@ -212,7 +220,9 @@ class CotahistProvider:
 
         partes = []
         anos_ok, anos_falha = [], []
-        for year in years:
+        for i, year in enumerate(years):
+            # Cache-hit? Então não houve requisição à B3 → não precisa pausar.
+            baixou = force_download or not self._zip_path(year).exists()
             try:
                 df = self.load_year(year, force_download=force_download)
             except MarketDataError as exc:
@@ -221,6 +231,11 @@ class CotahistProvider:
                 logger.warning("Pulando %s: %s", year, exc)
                 anos_falha.append(year)
                 continue
+            # Pausa educada só depois de um download real e nunca após o último ano.
+            if sleep_max > 0 and baixou and i < len(years) - 1:
+                espera = random.uniform(0, sleep_max)
+                logger.info("Pausa de %.1fs antes do próximo ano...", espera)
+                time.sleep(espera)
             df = df[df["tpmerc"].isin(mercados)].copy()
             # casa a raiz do código de negociação
             mask = df["codneg"].str.upper().str.startswith(tuple(roots_norm))
