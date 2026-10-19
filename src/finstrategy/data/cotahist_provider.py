@@ -36,6 +36,7 @@ inclusivas) e os decimais implícitos (V99 = 2 casas) seguem o layout oficial da
 from __future__ import annotations
 
 import io
+import logging
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,8 @@ import pandas as pd
 import requests
 
 from .errors import MarketDataError
+
+logger = logging.getLogger(__name__)
 
 # URL estável da série histórica anual (arquivo COTAHIST_A<ano>.ZIP).
 _COTAHIST_URL = "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A{year}.ZIP"
@@ -172,35 +175,66 @@ class CotahistProvider:
         roots: list[str],
         years: list[int],
         *,
+        classes: list[str] | None = None,
         force_download: bool = False,
+        skip_missing_years: bool = True,
     ) -> pd.DataFrame:
-        """Cotações de um setor (ações à vista + opções) para vários anos.
+        """Cotações de um setor (ações à vista e/ou opções) para vários anos.
 
-        `roots` é a lista de raízes dos tickers do setor (ex. ``["PETR", "ELET",
-        "CMIG", "EGIE", "TAEE", "CPLE", "CPFE"]``). Uma ação casa quando o ``codneg``
-        começa pela raiz e é mercado à vista; uma opção casa quando o ``codneg`` começa
-        pela raiz e o mercado é 070 (call) ou 080 (put) — assim pegamos toda a cadeia
-        de opções daquele ativo-objeto, inclusive séries já vencidas no ano.
+        `roots` é a lista de raízes dos tickers do setor (ex. ``["ELET", "CMIG",
+        "EGIE", "TAEE", "CPLE", "CPFE"]``). Uma ação casa quando o ``codneg`` começa
+        pela raiz e é mercado à vista; uma opção casa quando o ``codneg`` começa pela
+        raiz e o mercado é 070 (call) ou 080 (put) — assim pegamos toda a cadeia de
+        opções daquele ativo-objeto, inclusive séries já vencidas no ano.
+
+        `classes` restringe o resultado a um subconjunto de ``{"acao", "call",
+        "put"}`` (default: as três). Passar ``["acao"]`` é bem mais rápido num
+        intervalo longo de anos, porque nem chega a filtrar/concatenar as opções (que
+        são a imensa maioria das linhas).
+
+        `skip_missing_years`: se ``True`` (default), um ano que não baixa/parseia
+        (ex. ano ainda não publicado, 404, queda de rede) vira um aviso no log e é
+        **pulado** — os demais anos continuam. Se ``False``, o primeiro ano com
+        problema interrompe tudo (comportamento antigo). Isso é o que te deixa pedir
+        ``2010-2026`` sem um único ano ruim derrubar a coleta inteira.
 
         Acrescenta a coluna ``classe`` com os valores ``acao`` / ``call`` / ``put``.
         """
         roots_norm = [r.strip().upper() for r in roots]
+        classes_sel = set(classes) if classes else {"acao", "call", "put"}
+        tpmerc_por_classe = {
+            "acao": TPMERC_VISTA,
+            "call": TPMERC_OPCAO_COMPRA,
+            "put": TPMERC_OPCAO_VENDA,
+        }
+        mercados = {tpmerc_por_classe[c] for c in classes_sel}
+        rotulo_mercado = {v: k for k, v in tpmerc_por_classe.items()}
+
         partes = []
+        anos_ok, anos_falha = [], []
         for year in years:
-            df = self.load_year(year, force_download=force_download)
-            mercados = {TPMERC_VISTA, TPMERC_OPCAO_COMPRA, TPMERC_OPCAO_VENDA}
+            try:
+                df = self.load_year(year, force_download=force_download)
+            except MarketDataError as exc:
+                if not skip_missing_years:
+                    raise
+                logger.warning("Pulando %s: %s", year, exc)
+                anos_falha.append(year)
+                continue
             df = df[df["tpmerc"].isin(mercados)].copy()
             # casa a raiz do código de negociação
             mask = df["codneg"].str.upper().str.startswith(tuple(roots_norm))
             df = df[mask].copy()
-            df["classe"] = df["tpmerc"].map(
-                {
-                    TPMERC_VISTA: "acao",
-                    TPMERC_OPCAO_COMPRA: "call",
-                    TPMERC_OPCAO_VENDA: "put",
-                }
-            )
+            df["classe"] = df["tpmerc"].map(rotulo_mercado)
             partes.append(df)
+            anos_ok.append(year)
+
+        if anos_falha:
+            logger.warning(
+                "Anos obtidos: %s | anos pulados (indisponíveis): %s",
+                anos_ok,
+                anos_falha,
+            )
         if not partes:
             return pd.DataFrame()
         out = pd.concat(partes, ignore_index=True)

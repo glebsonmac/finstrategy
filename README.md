@@ -179,18 +179,28 @@ Roda em qualquer sistema (macOS/Linux/Windows), **sem** Yahoo e **sem** terminal
 `data_store/cotahist/`, então o download acontece uma vez só por ano.
 
 ```bash
-# anos 2023 a 2025, raízes padrão do setor energia (Taesa, CPFL, Engie, Cemig, Copel,
-# Eletrobras, Energisa, Eneva, Equatorial, Neoenergia, Auren, CTEEP, Petrobras, PRIO)
-python scripts/collect_cotahist.py --years 2023-2025
+# AÇÕES do setor elétrico brasileiro, 2010 a 2026 (o caso da dissertação).
+# --only acao pula o processamento das opções → bem mais rápido no intervalo longo.
+# Raízes default do setor elétrico: Taesa, CTEEP, Alupar, CPFL, Engie, Cemig, Copel,
+# Eletrobras, Energisa, Eneva, Equatorial, Neoenergia, Auren, Light, etc.
+python scripts/collect_cotahist.py --years 2010-2026 --only acao
 
-# anos avulsos e raízes customizadas (a raiz casa a ação E toda a cadeia de opções)
-python scripts/collect_cotahist.py --years 2024,2025 --roots PETR,ELET,EGIE
+# ações + toda a cadeia de opções (calls 070 / puts 080) de um subconjunto de nomes
+python scripts/collect_cotahist.py --years 2024,2025 --roots ELET,EGIE,CMIG
+
+# só puts de um papel específico
+python scripts/collect_cotahist.py --years 2025 --roots ELET --only put
 ```
 
+O intervalo pode ser `2010-2026` (faixa), `2024,2025` (avulsos) ou os dois juntos. Um
+ano que não estiver disponível no servidor da B3 (ou uma falha de rede) é **pulado com
+um aviso** (`WARNING:`) — não derruba a coleta dos outros anos, então dá para pedir
+`2010-2026` sem medo de um ano ruim zerar tudo.
+
 Gera, em `data_store/cotahist/` (ou `--output-dir`), um CSV consolidado mais um por
-classe (`energia_acao_*.csv`, `energia_call_*.csv`, `energia_put_*.csv`), com
+classe pedida (`eletrico_acao_*.csv`, `eletrico_call_*.csv`, `eletrico_put_*.csv`), com
 OHLC/volume por pregão e, nas opções, `preexe` (strike) e `datven` (vencimento) na
-mesma linha.
+mesma linha. (O prefixo vira `setor_` se você passar `--roots` custom.)
 
 > **Nota sobre "randomizar IP/MAC para não ser derrubado pela B3":** não é feito, de
 > propósito, porque é desnecessário. A COTAHIST é um arquivo estático cujo uso
