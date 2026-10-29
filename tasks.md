@@ -863,3 +863,36 @@ corretora não retendo séries passadas — nesse caso o COTAHIST pesquisado aci
 volta a ser a única opção real pra histórico de anos.
 
 Próximo passo: usuário roda de novo no Windows e conta quantos meses aparecem agora.
+
+**2026-10-29 (sessão 10) — validação empírica do notebook de Monte Carlo/hedging nas
+elétricas da B3**
+
+Usuário pediu para adaptar `notebooks/monte_carlo_risco_hedging.ipynb` (laboratório
+teórico, parâmetros sintéticos S0=100, σ=20%) às ações elétricas brasileiras usando os
+CSVs da COTAHIST já baixados, e verificar se os modelos preveem risco e preço de entrada.
+O original foi **mantido intacto** (é o laboratório da revisão em LaTeX e não está no
+git); a versão empírica é um notebook novo.
+
+- [x] `notebooks/monte_carlo_risco_hedging_b3.ipynb` (executado, 0 erros, ~70 s):
+      CMIG4, TAEE11, EGIE3, CPFE3, EQTL3, ENEV3, CPLE3, 2017–2026, backtest fora da
+      amostra a partir de jan/2019. Ajuste de desdobramentos (fator do Yahoo, data
+      conferida na B3) e de proventos (`Adj Close/Close` do Yahoo); Selic diária do SGS 11.
+      Cache em `data_store/cotahist/cache_notebook/` (depois roda offline).
+      Partes: fatos estilizados; backtest de VaR/ES de 1 dia (MBG, EWMA, GARCH-t do app,
+      HS, FHS; Kupiec, Christoffersen, Z2 de Acerbi–Székely, FZ0 + Diebold–Mariano,
+      semáforo de Basileia); VaR de 10 dias por Monte Carlo GARCH; distribuição de 1 mês
+      (PIT, CRPS, Brier) e ordem limitada de entrada; precificação de 69 mil cotações de
+      puts reais; put protetora e delta hedge com 481 operações reais.
+- Resultados principais: MBG reprovado no VaR 99% diário (1,65% de violações, Kupiec ok
+  em 1/7); GARCH-t aprovado em 7/7. GARCH com drift neutro ao risco (como em
+  `simulate_price_paths`) dá P(perda) viesada (47% previsto × 42% real): usar ℙ para
+  risco mostrado ao usuário. Modelos históricos subestimam puts OTM (skew + prêmio de
+  vol.). O P&L médio real do delta hedge bate com e^{rτ}[P(σ_imp) − P(σ_real)].
+- Limitações registradas no próprio notebook: `preult` em vez de bid/ask
+  (`PREOFC`/`PREOFV` da COTAHIST ainda não lidos pelo `cotahist_provider`), sem custos
+  de transação/aluguel, ações do mesmo setor (testes conjuntos não independentes).
+- Ambiente: `nbformat`, `nbclient` e `ipykernel` instalados no `.venv` (para executar o
+  notebook fora do Jupyter); não estão no `pyproject.toml`.
+
+Próximo passo (sugestão): ler `PREOFC`/`PREOFV` e refazer as Partes 6–7 contra o mid;
+decidir com o usuário se o app passa a mostrar P(perda) sob ℙ.
