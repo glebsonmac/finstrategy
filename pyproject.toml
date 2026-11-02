@@ -1,34 +1,30 @@
 [project]
-name = "finstrategy"
+name = "riskbt"
 version = "0.1.0"
-description = "Ação + put de proteção: dados, Black-Scholes, DQN e relatório para o setor elétrico (e outros ativos)"
-requires-python = ">=3.10"
+description = "VaR and Expected Shortfall backtesting system for Brazilian equity portfolios"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "pandas",
     "scipy",
+    "statsmodels",
+    "arch",
     "yfinance",
+    "pyarrow",
     "streamlit",
-    "pandas_market_calendars",
-    "reportlab",
-    "pyyaml",
-    "matplotlib",
+    "altair",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
-# Só instala em Python nativo do Windows (o pacote não publica wheel para mac/Linux) —
-# ver src/finstrategy/data/mt5_provider.py. python-dotenv carrega o .env com as
-# credenciais do MT5 (MT5_LOGIN/MT5_PASSWORD/MT5_SERVER/MT5_PATH) automaticamente.
-mt5 = ["MetaTrader5", "python-dotenv"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["riskbt"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 testpaths = ["tests"]

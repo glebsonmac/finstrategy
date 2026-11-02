@@ -231,3 +231,6 @@ data_store/collector_status.json
 config/watchlist.yaml
 config/settings.yaml
 projeto_mestrado_VaR_ES.pdf
+# riskbt: Parquet cache, frozen data versions and experiment outputs
+/data/
+/results/
