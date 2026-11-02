@@ -896,3 +896,16 @@ git); a versão empírica é um notebook novo.
 
 Próximo passo (sugestão): ler `PREOFC`/`PREOFV` e refazer as Partes 6–7 contra o mid;
 decidir com o usuário se o app passa a mostrar P(perda) sob ℙ.
+
+**2026-10-29 (sessão 10, continuação) — guia dos dados da COTAHIST**
+
+- [x] `notebooks/guia_dados_cotahist_eletrico.ipynb` (executado, 0 erros, ~5 s): notebook
+      de consulta sobre os CSVs de ações e puts do setor elétrico. Tem o dicionário das 18
+      colunas, os códigos `tpmerc`/`codbdi`/`especi`, a decodificação do código das opções,
+      cobertura, estatísticas, gráficos, checagens de qualidade e funções `cotacao`,
+      `cadeia_puts`, `serie_put` e `resumo_ticker`.
+- Achados registrados no notebook: (1) `especi` traz marcadores ex-provento (ED/EJ/EDJ/
+  EB…) que começam na data ex (97% batem com as datas de dividendo do Yahoo na CMIG4); dá
+  para tirar as datas ex direto da COTAHIST; (2) `premed` é truncado no centavo (em puts
+  baratas use `voltot/quatot`); (3) códigos de put são reutilizados, então a chave da série
+  é (codneg, datven); (4) ~25% das séries de put tiveram o strike ajustado por proventos.
