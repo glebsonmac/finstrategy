@@ -9,16 +9,20 @@ Risk measurement tool. Not investment advice.
 
 ## Install
 
-Python 3.11 or later.
+Python 3.11 or later. The tests passed in new environments with Python 3.11, 3.12 and 3.14.
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements.txt
 ```
 
-If the app or a script stops with `No module named 'statsmodels'` or `'arch'`, the active
-environment is missing the dependencies: run the `pip install` line above in it.
+`requirements.txt` pins the versions the tests passed with. After `source`, `python` and `pip` come
+from the environment, and the commands below assume it is active.
+
+If the app or a script stops with `No module named ...`, the active environment is missing the
+dependencies: activate it and run the `pip install` line again. If `.venv` was copied from another
+machine or the project folder moved, delete `.venv` and create it again.
 
 ## Run the app
 
