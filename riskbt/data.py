@@ -281,6 +281,15 @@ def freeze_version(
     return folder
 
 
+def latest_frozen_version(data_dir: Path = config.DATA_DIR) -> str:
+    """Name of the most recent frozen version; names are dates, so they sort in time."""
+    folder = Path(data_dir) / "frozen"
+    versions = sorted(path.name for path in folder.glob("*") if (path / "manifest.json").exists())
+    if not versions:
+        raise DataError(f"No frozen data at {folder}. Run: python scripts/freeze_data.py")
+    return versions[-1]
+
+
 def load_frozen(version: str, data_dir: Path = config.DATA_DIR) -> PriceData:
     """Read a frozen version, refusing files that no longer match their recorded hash."""
     folder = Path(data_dir) / "frozen" / version

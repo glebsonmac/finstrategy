@@ -212,3 +212,11 @@ def test_known_break_becomes_a_zero_return(monkeypatch):
     clean, report = data.validate_prices(make_bars("A", dates, [10.0, 11.0, 22.0, 23.0]), ["A"], dates)
     np.testing.assert_allclose(clean["A"], [20.0, 22.0, 22.0, 23.0])
     assert report.breaks_removed[0]["log_return"] == pytest.approx(np.log(2))
+
+
+def test_latest_frozen_version_picks_the_most_recent(tmp_path):
+    with pytest.raises(data.DataError, match="freeze_data"):
+        data.latest_frozen_version(tmp_path)
+    for version in ("2026-10-30", "2026-11-03"):
+        data.freeze_version(["A.SA"], version, "2020-01-01", "2021-01-01", "2026-01-01", tmp_path, fake_fetch())
+    assert data.latest_frozen_version(tmp_path) == "2026-11-03"

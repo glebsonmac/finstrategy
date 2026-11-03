@@ -27,14 +27,18 @@ A new portfolio takes about a minute: each trading day since 2012 gets a forecas
 
 ## Run the experiment
 
-Freeze a data version, then run the Ibovespa and the 36 planned portfolios on it. A frozen version
-is never replaced, and its hash is checked every time it is loaded.
+Download and freeze the data, then run the Ibovespa and the 36 planned portfolios on it. Data is
+not stored in git, and any machine can recreate it with these commands.
 
 ```bash
-python scripts/freeze_data.py 2026-10-30 2026-11-02   # version, exclusive end date
-python scripts/check_regimes.py 2026-10-30            # optional chart of the crisis periods
-python scripts/run_experiment.py 2026-10-30           # writes results/<run_date>/
+python scripts/freeze_data.py      # version named after today, in data/frozen/
+python scripts/check_regimes.py <version>   # optional chart of the crisis periods
+python scripts/run_experiment.py   # uses the latest version, writes results/<run_date>/
 ```
+
+A frozen version is never replaced, and its hash is checked every time it is loaded. Yahoo revises
+adjusted prices, so a new extraction may differ slightly from an older one. To compare machines
+exactly, copy `data/frozen/<version>/` and run `python scripts/run_experiment.py <version>`.
 
 | Output | Content |
 |---|---|

@@ -1,6 +1,8 @@
 """Run the thesis experiment and write results/<run_date>/.
 
-Usage: python scripts/run_experiment.py <data_version> [run_date]
+Usage: python scripts/run_experiment.py [data_version] [run_date]
+
+The data version defaults to the most recent frozen one, and the run date to today.
 """
 
 import json
@@ -68,4 +70,5 @@ def main(data_version: str, run_date: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else date.today().isoformat())
+    version = sys.argv[1] if len(sys.argv) > 1 else data.latest_frozen_version()
+    main(version, sys.argv[2] if len(sys.argv) > 2 else date.today().isoformat())
