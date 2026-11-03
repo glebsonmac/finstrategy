@@ -29,6 +29,50 @@ streamlit run app.py --server.address localhost
 A new portfolio can take up to a minute: each trading day since 2012 gets a forecast. Results
 stay in memory until the app is closed. Weights accept a dot or a comma as the decimal separator.
 
+## Examples by sector
+
+Three example portfolios. In the app, type each table into the portfolio grid and click
+**Calculate risk**. The app accepts tickers with or without `.SA`.
+
+| Electric utilities | Weight | | Electric utilities and oil and gas | Weight | | Mixed | Weight |
+|---|---|---|---|---|---|---|---|
+| CMIG4 | 0.2 | | CMIG4 | 0.2 | | CMIG4 | 0.2 |
+| CPFE3 | 0.2 | | EGIE3 | 0.2 | | PETR4 | 0.2 |
+| EGIE3 | 0.2 | | EQTL3 | 0.2 | | VALE3 | 0.2 |
+| EQTL3 | 0.2 | | PETR3 | 0.1 | | ITUB4 | 0.2 |
+| TAEE11 | 0.2 | | PETR4 | 0.2 | | ABEV3 | 0.1 |
+| | | | PRIO3 | 0.1 | | WEGE3 | 0.1 |
+
+The mixed portfolio combines electric utilities, oil and gas, mining, banking, consumer goods and
+industrials. These are examples of how to run the system, not suggested allocations.
+
+To run all three without the app, freeze the data once with `python scripts/freeze_data.py`, save
+this code as `sector_examples.py` in the project root and run `python sector_examples.py`. It takes
+less than a minute for the three portfolios.
+
+```python
+from riskbt import config, data, experiment
+
+PORTFOLIOS = {
+    "electric": {"CMIG4.SA": 0.2, "CPFE3.SA": 0.2, "EGIE3.SA": 0.2, "EQTL3.SA": 0.2, "TAEE11.SA": 0.2},
+    "electric_oil_gas": {
+        "CMIG4.SA": 0.2, "EGIE3.SA": 0.2, "EQTL3.SA": 0.2,
+        "PETR3.SA": 0.1, "PETR4.SA": 0.2, "PRIO3.SA": 0.1,
+    },
+    "mixed": {
+        "CMIG4.SA": 0.2, "PETR4.SA": 0.2, "VALE3.SA": 0.2,
+        "ITUB4.SA": 0.2, "ABEV3.SA": 0.1, "WEGE3.SA": 0.1,
+    },
+}
+
+prices = data.load_frozen(data.latest_frozen_version()).prices
+for name, weights in PORTFOLIOS.items():
+    analysis = experiment.analyze_portfolio(prices, weights)
+    choice = analysis.recommendation
+    var_99 = analysis.latest[(choice.estimator, config.ALPHA_VAR)].var
+    print(f"{name}: {choice.estimator} ({choice.status}), regime {choice.regime}, VaR 99% {var_99:.2%}")
+```
+
 ## Run the experiment
 
 Download and freeze the data, then run the Ibovespa and the 36 planned portfolios on it. Data is
