@@ -16,9 +16,11 @@ from riskbt.i18n import DEFAULT_LANGUAGE, LANGUAGES, format_currency, format_num
 from riskbt.recommend import NONE_PASSED
 from riskbt.regimes import crisis_episodes
 
-DEFAULT_PORTFOLIO = pd.DataFrame({"ticker": ["PETR4", "VALE3", "ITUB4"], "weight": [0.4, 0.3, 0.3]})
+DEFAULT_PORTFOLIO = pd.DataFrame({"ticker": ["PETR4", "VALE3", "ITUB4"], "weight": ["0.4", "0.3", "0.3"]})
 DEFAULT_AMOUNT = 100_000.0
 REGIMES = ("all", "calm", "crisis")
+WEIGHT_TOLERANCE = 1e-6
+TABLE_ROW_HEIGHT = 35
 LOSS_COLOR, ES_COLOR, MUTED_COLOR = "#2f7fd6", "#e0562a", "#8a8a8a"  # legible on light and dark themes
 alt.data_transformers.disable_max_rows()
 
@@ -60,34 +62,68 @@ def show_explanation_parts(explanation: Explanation, lang: str) -> None:
     st.markdown(f"**{t('compare.reference', lang)}:** {explanation.reference}")
 
 
+def table_height(rows: int) -> int:
+    """Height that shows every row, so nothing hides behind an inner scroll bar."""
+    return (rows + 1) * TABLE_ROW_HEIGHT + 3
+
+
+def portfolio_rows(table: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Tickers and weights of the filled rows. Weights are text because the grid's number cells
+    follow the browser's locale: in a pt-BR browser they would read a typed 0.5 as 5."""
+    rows = table.dropna(subset=["ticker"])
+    rows = rows[rows["ticker"].astype(str).str.strip() != ""]
+    weights = rows["weight"].astype(str).str.strip().str.replace(",", ".", regex=False)
+    return rows["ticker"], pd.to_numeric(weights, errors="coerce")
+
+
+def show_weight_total(table: pd.DataFrame, lang: str) -> None:
+    total = portfolio_rows(table)[1].sum()
+    key = "input.total_ok" if abs(total - 1) <= WEIGHT_TOLERANCE else "input.total_bad"
+    st.markdown(t(key, lang, total=format_number(total, lang, 4)))
+
+
+def starting_table(lang: str) -> pd.DataFrame:
+    """Table the editor starts from. Translated column labels make Streamlit build a new editor
+    for each language, which forgets the edits, so a new editor starts from the last table."""
+    state = st.session_state
+    if state.get("table_lang") != lang:
+        state["table_start"] = state.get("table_last", DEFAULT_PORTFOLIO)
+        state["table_lang"] = lang
+    return state["table_start"]
+
+
 def read_inputs(lang: str) -> tuple[pd.DataFrame, float, bool]:
     st.subheader(t("input.header", lang))
     st.write(t("input.help", lang))
+    st.caption(t("input.table_help", lang))
     table = st.data_editor(
-        DEFAULT_PORTFOLIO, num_rows="dynamic", hide_index=True, key="portfolio",
+        starting_table(lang), num_rows="dynamic", hide_index=True, key=f"portfolio_{lang}",
         column_config={
             "ticker": st.column_config.TextColumn(t("input.ticker", lang)),
-            "weight": st.column_config.NumberColumn(t("input.weight", lang), format="%.4f"),
+            "weight": st.column_config.TextColumn(t("input.weight", lang)),
         },
     )
+    st.session_state["table_last"] = table
+    show_weight_total(table, lang)
     amount = st.number_input(t("input.amount", lang), min_value=0.0, value=DEFAULT_AMOUNT, step=1000.0)
     return table, amount, st.button(t("input.run", lang), type="primary")
 
 
 def parse_portfolio(table: pd.DataFrame, amount: float, lang: str) -> tuple[tuple, tuple, str | None]:
     """Return tickers, weights and a translated error message, if any."""
-    rows = table.dropna(subset=["ticker"])
-    rows = rows[rows["ticker"].astype(str).str.strip() != ""]
-    tickers = [str(code).strip().upper() for code in rows["ticker"]]
+    codes, parsed_weights = portfolio_rows(table)
+    tickers = [str(code).strip().upper() for code in codes]
     tickers = [code if code.endswith(".SA") or code.startswith("^") else f"{code}.SA" for code in tickers]
-    weights = [float(value) for value in rows["weight"].fillna(0.0)]
+    weights = [float(value) for value in parsed_weights]
     if not tickers:
         return (), (), t("error.no_assets", lang)
+    if parsed_weights.isna().any():
+        return (), (), t("error.weight_invalid", lang)
     if len(set(tickers)) != len(tickers):
         return (), (), t("error.duplicate", lang)
     if min(weights) < 0:
         return (), (), t("error.negative", lang)
-    if abs(sum(weights) - 1) > 1e-6:
+    if abs(sum(weights) - 1) > WEIGHT_TOLERANCE:
         return (), (), t("error.weight_sum", lang, total=format_number(sum(weights), lang, 4))
     if amount <= 0:
         return (), (), t("error.amount", lang)
@@ -106,35 +142,48 @@ def returns_histogram(returns: pd.Series, var: float, es: float | None, lang: st
         x=alt.X("value:Q", bin=alt.Bin(maxbins=60), axis=percent_axis(lang, t("main.chart_x", lang))),
         y=alt.Y("count():Q", title=t("main.chart_y", lang)),
     )
-    marks = [{"position": -100 * var, "label": t("main.var_metric", lang), "color": LOSS_COLOR, "row": 4}]
+    marks = [{"position": -100 * var, "label": t("main.var_metric", lang), "color": LOSS_COLOR}]
     if es is not None:
-        marks.append({"position": -100 * es, "label": t("main.es_metric", lang), "color": ES_COLOR, "row": 20})
+        marks.append({"position": -100 * es, "label": t("main.es_metric", lang), "color": ES_COLOR})
     lines = alt.Chart(pd.DataFrame(marks)).mark_rule(strokeWidth=2).encode(
         x="position:Q", color=alt.Color("color:N", scale=None), tooltip=["label:N"],
     )
-    labels = alt.Chart(pd.DataFrame(marks)).mark_text(align="right", dx=-4, baseline="top", fontWeight="bold").encode(
-        x="position:Q", y=alt.Y("row:Q", scale=None), text="label:N", color=alt.Color("color:N", scale=None),
-    )
+    leftmost = min(mark["position"] for mark in marks)
+    labels = alt.layer(*[
+        alt.Chart(pd.DataFrame([mark])).mark_text(
+            # The two lines can be close: each label goes on the outer side of its own line.
+            align="right" if mark["position"] == leftmost else "left", dx=-4 if mark["position"] == leftmost else 4,
+            baseline="top", fontWeight="bold",
+        ).encode(x="position:Q", y=alt.value(4), text="label:N", color=alt.Color("color:N", scale=None))
+        for mark in marks
+    ])
     return (bars + lines + labels).properties(title=t("main.chart_title", lang, days=days), height=260)
 
 
-def show_main_result(analysis, amount: float, lang: str) -> None:
+def portfolio_label(tickers: tuple, weights: tuple, lang: str) -> str:
+    return ", ".join(f"{ticker.removesuffix('.SA')} {format_percent(weight, lang, 1)}" for ticker, weight in zip(tickers, weights))
+
+
+def show_main_result(analysis, amount: float, label: str, lang: str) -> None:
     rec = analysis.recommendation
     forecast_var = analysis.latest[(rec.estimator, config.ALPHA_VAR)]
     forecast_es = analysis.latest[(rec.estimator, config.ALPHA_ES)]
     name = t(f"estimator.{rec.estimator}.name", lang)
     regime_name = t(f"regime.{rec.regime}", lang)
     st.subheader(t("main.header", lang))
+    st.write(t("main.for_portfolio", lang, items=label, last=analysis.returns.index[-1].strftime("%Y-%m-%d")))
     columns = st.columns([1, 1, 0.7, 1.7])  # the estimator's name is the longest value
     columns[0].metric(t("main.var_metric", lang), format_currency(forecast_var.var * amount, lang), format_percent(forecast_var.var, lang), delta_color="off", delta_arrow="off")
     es_text = format_currency(forecast_es.es * amount, lang) if forecast_es.es is not None else t("main.not_available", lang)
     es_delta = format_percent(forecast_es.es, lang) if forecast_es.es is not None else None
     columns[1].metric(t("main.es_metric", lang), es_text, es_delta, delta_color="off", delta_arrow="off")
     columns[2].metric(t("main.regime_metric", lang), regime_name)
-    columns[3].metric(t("main.estimator_metric", lang), name)
+    columns[3].caption(t("main.estimator_metric", lang))  # a metric would cut this long name
+    columns[3].markdown(f"#### {name}")
     for line in main_result_summary(forecast_var.var, forecast_es.es, config.ALPHA_VAR, config.ALPHA_ES, amount, lang):
         st.write(line)
     st.write(t("main.horizon", lang))
+    st.write(t(f"main.regime_reading.{rec.regime}", lang))
     show_recommendation(rec, name, regime_name, lang)
     show_chart(returns_histogram(analysis.returns, forecast_var.var, forecast_es.es, lang), t("main.chart_caption", lang))
     with st.expander(t("app.see_more", lang)):
@@ -304,7 +353,8 @@ def dm_table(tests: pd.DataFrame, regime: str, lang: str) -> pd.DataFrame:
 def show_tests(analysis, alpha: float, lang: str) -> None:
     st.markdown(f"**{t('tests.header', lang)}**")
     st.write(t("tests.summary", lang))
-    st.dataframe(tests_table(analysis.tests, alpha, lang), hide_index=True, width="stretch")
+    results = tests_table(analysis.tests, alpha, lang)
+    st.dataframe(results, hide_index=True, width="stretch", height=table_height(len(results)))
     with st.expander(t("app.see_more", lang)):
         for test in ("kupiec", "christoffersen", "z2", "fz0", "dm"):
             explanation = test_explanation(test, lang)
@@ -314,7 +364,8 @@ def show_tests(analysis, alpha: float, lang: str) -> None:
         regime = analysis.recommendation.regime
         st.markdown(f"**{t('tests.dm_title', lang)}**")
         st.caption(t("tests.dm_caption", lang, regime=t(f"regime.{regime}", lang)))
-        st.dataframe(dm_table(analysis.tests, regime, lang), hide_index=True, width="stretch")
+        comparisons = dm_table(analysis.tests, regime, lang)
+        st.dataframe(comparisons, hide_index=True, width="stretch", height=table_height(len(comparisons)))
         st.write(t("tests.care", lang))
 
 
@@ -398,7 +449,7 @@ def compute(tickers: tuple, weights: tuple, as_of: str, lang: str):
 def main() -> None:
     st.set_page_config(page_title="riskbt", layout="wide")
     current = st.session_state.get("lang", DEFAULT_LANGUAGE)
-    lang = st.selectbox(t("app.language", current), list(LANGUAGES), index=list(LANGUAGES).index(DEFAULT_LANGUAGE), format_func=LANGUAGES.get, key="lang")
+    lang = st.columns([1, 3])[0].selectbox(t("app.language", current), list(LANGUAGES), index=list(LANGUAGES).index(DEFAULT_LANGUAGE), format_func=LANGUAGES.get, key="lang")
     st.title(t("app.title", lang))
     st.info(t("app.notice", lang))
     table, amount, pressed = read_inputs(lang)
@@ -411,12 +462,15 @@ def main() -> None:
     if "request" not in st.session_state:
         st.write(t("input.start_hint", lang))
         return
+    entered = (tickers, weights)
     tickers, weights, as_of = st.session_state["request"]
+    if entered != (tickers, weights):
+        st.warning(t("main.stale", lang))
     result = compute(tickers, weights, as_of, lang)
     if result is None:
         return
     analysis, report = result
-    show_main_result(analysis, amount, lang)
+    show_main_result(analysis, amount, portfolio_label(tickers, weights, lang), lang)
     show_comparison(analysis, amount, lang)
     show_backtest(analysis, lang)
     show_data(analysis, report, tickers, as_of, lang)

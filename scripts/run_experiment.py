@@ -48,7 +48,10 @@ def main(data_version: str, run_date: str) -> None:
     universe = experiment.eligible_universe(frozen.prices)
     specs = [experiment.ibovespa_spec(), *experiment.build_design(universe)]
     folder = config.RESULTS_DIR / run_date
-    folder.mkdir(parents=True, exist_ok=False)
+    if folder.exists():
+        sys.exit(f"{folder} already exists and is never replaced. Choose another run date:\n"
+                 f"  python scripts/run_experiment.py {data_version} {run_date}-2")
+    folder.mkdir(parents=True)
 
     forecasts, parameters, tests, portfolios, seconds = [], [], [], [], {}
     for position, spec in enumerate(specs, start=1):

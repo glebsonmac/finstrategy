@@ -55,7 +55,7 @@ def test_dynamic_keys_exist():
 
 def test_no_key_is_unused():
     text = "\n".join(path.read_text(encoding="utf-8") for path in source_files())
-    dynamic = ("estimator.", "regime.", "zone.", "recommend.reason.", "test.")
+    dynamic = ("main.regime_reading.", "estimator.", "regime.", "zone.", "recommend.reason.", "test.")
     unused = [key for key in load_locale("en") if not key.startswith(dynamic) and f'"{key}"' not in text and f"'{key}'" not in text]
     assert not unused
 

@@ -17,13 +17,17 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+If the app or a script stops with `No module named 'statsmodels'` or `'arch'`, the active
+environment is missing the dependencies: run the `pip install` line above in it.
+
 ## Run the app
 
 ```bash
 streamlit run app.py --server.address localhost
 ```
 
-A new portfolio takes about a minute: each trading day since 2012 gets a forecast.
+A new portfolio can take up to a minute: each trading day since 2012 gets a forecast. Results
+stay in memory until the app is closed. Weights accept a dot or a comma as the decimal separator.
 
 ## Run the experiment
 
@@ -35,6 +39,10 @@ python scripts/freeze_data.py      # version named after today, in data/frozen/
 python scripts/check_regimes.py <version>   # optional chart of the crisis periods
 python scripts/run_experiment.py   # uses the latest version, writes results/<run_date>/
 ```
+
+The experiment prints one line per portfolio and takes about 6 minutes. An existing results folder
+is never replaced: to run again on the same day, name another one with
+`python scripts/run_experiment.py <version> <run_date>`.
 
 A frozen version is never replaced, and its hash is checked every time it is loaded. Yahoo revises
 adjusted prices, so a new extraction may differ slightly from an older one. To compare machines

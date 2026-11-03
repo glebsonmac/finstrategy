@@ -73,7 +73,8 @@ def test_full_page_renders_all_blocks_in_order(lang):
     expected = ["input.header", "main.header", "compare.header", "backtest.header", "data.header", "download.header"]
     assert headers == [t(key, lang) for key in expected]
     assert t("app.notice", lang) in all_text(app)
-    assert len(app.metric) == 4
+    assert len(app.metric) == 3
+    assert t("main.estimator_metric", lang) in all_text(app)
     assert len(app.expander) >= 9  # main + six estimators + tests + data
     assert len(app.dataframe) >= 2
     assert t("recommend.why", lang) in all_text(app)
@@ -114,9 +115,9 @@ def app_module_parse(frame, amount, lang):
     import ast
     source = Path(APP).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "parse_portfolio")
-    namespace = {"t": t, "pd": pd, "format_number": __import__("riskbt.i18n", fromlist=["format_number"]).format_number}
-    exec(compile(ast.Module([function], []), APP, "exec"), namespace)
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in ("portfolio_rows", "parse_portfolio")]
+    namespace = {"t": t, "pd": pd, "format_number": __import__("riskbt.i18n", fromlist=["format_number"]).format_number, "WEIGHT_TOLERANCE": 1e-6}
+    exec(compile(ast.Module(functions, []), APP, "exec"), namespace)
     return namespace["parse_portfolio"](frame, amount, lang)
 
 
@@ -129,6 +130,20 @@ def test_parse_normalizes_tickers_and_rejects_bad_input():
     assert app_module_parse(negative, 1000.0, "en")[2] == t("error.negative", "en")
     assert app_module_parse(pd.DataFrame({"ticker": [None], "weight": [None]}), 1000.0, "en")[2] == t("error.no_assets", "en")
     assert app_module_parse(frame, 0.0, "en")[2] == t("error.amount", "en")
+
+
+def test_weights_accept_dot_and_comma_as_text():
+    frame = pd.DataFrame({"ticker": ["PETR4", "VALE3"], "weight": ["0,5", " 0.5 "]})
+    assert app_module_parse(frame, 1000.0, "en")[:2] == (("PETR4.SA", "VALE3.SA"), (0.5, 0.5))
+    for bad in ("abc", None, "40%"):
+        frame = pd.DataFrame({"ticker": ["PETR4", "VALE3"], "weight": ["1", bad]})
+        assert app_module_parse(frame, 1000.0, "pt")[2] == t("error.weight_invalid", "pt")
+
+
+def test_page_tells_when_the_table_no_longer_matches_the_result():
+    app = press_run(start())
+    assert t("main.for_portfolio", "en", items="PETR4 40.0%, VALE3 30.0%, ITUB4 30.0%", last=fake_load_prices(["PETR4.SA"], "", "", "")[0].index[-1].strftime("%Y-%m-%d")) in all_text(app)
+    assert t("main.stale", "en") not in all_text(app)
 
 
 def test_unknown_ticker_shows_a_translated_error(monkeypatch):

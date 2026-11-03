@@ -1,0 +1,3 @@
+# Hide the "Deploy" button and developer options, which mean nothing to the people using the page.
+[client]
+toolbarMode = "minimal"
