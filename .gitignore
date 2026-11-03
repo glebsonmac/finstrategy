@@ -234,3 +234,5 @@ projeto_mestrado_VaR_ES.pdf
 # riskbt: Parquet cache, frozen data versions and experiment outputs
 /data/
 /results/
+*.csv
+.DS_Store
